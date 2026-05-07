@@ -1,0 +1,58 @@
+# Python virtual environment
+venv/
+venv_fastapi/
+venv_backend/
+productix_fastapi/venv_fastapi/
+env/
+*.pyc
+__pycache__/
+
+# All database files (everywhere)
+*.db
+*.db-shm
+*.db-wal
+
+# Large binary / media / installer files
+*.mp4
+*.avi
+*.mov
+*.rar
+*.zip
+*.exe
+*.pptx
+
+# Build artifacts
+project/dist/
+dist/
+build/
+installer/
+
+# Log files
+*.log
+uvicorn_output.log
+
+# Temp / scratch / test artifacts
+uploads_temp/
+scratch/
+productix_fastapi/scratch/
+testsprite_tests/
+project/testsprite_tests/
+productix_fastapi/testsprite_tests/
+*.xlsx
+test_out.txt
+
+# Environment / secrets
+.env
+project/.env
+
+# Frontend dependencies
+project/node_modules/
+node_modules/
+
+# VS Code / IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
