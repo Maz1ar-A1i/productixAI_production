@@ -294,23 +294,23 @@ export default function RevenuePlugin() {
         // Fetch products from Backend
         const prodRes = await api.get('/products/');
         
-        // Fetch towers from LocalStorage
-        const lsTowers = JSON.parse(localStorage.getItem("telco_towers_v1") || "[]").map(t => ({
+        // Fetch units from LocalStorage
+        const lsUnits = JSON.parse(localStorage.getItem("telco_units_v1") || "[]").map(t => ({
           id: `ls_${t.id}`,
           name: `${t.name} (Local)`,
           isLocal: true
         }));
 
-        setProducts([...prodRes.data, ...lsTowers]);
+        setProducts([...prodRes.data, ...lsUnits]);
 
-        // Fetch local tower data
-        const allData = JSON.parse(localStorage.getItem("telco_tower_data_v2") || "{}");
+        // Fetch local unit data
+        const allData = JSON.parse(localStorage.getItem("telco_unit_data_v2") || "{}");
         let flattenedRows = [];
         
         Object.keys(allData).forEach(tId => {
           const fullId = `ls_${tId}`;
           if (!filters.productId || filters.productId === fullId || filters.productId === tId) {
-            const rows = allData[tId].towerRows || [];
+            const rows = allData[tId].unitRows || [];
             flattenedRows = [...flattenedRows, ...rows];
           }
         });

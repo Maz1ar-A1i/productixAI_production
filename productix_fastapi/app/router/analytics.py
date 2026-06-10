@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict, List
 from ..database import get_db
-from ..models import AIAnalysis, Product, Batch, ShiftEntry, User, ProductDataRecord
+from ..models import AIAnalysis, Product, Batch, ShiftEntry, User, ProductDataRecord, UserProductAssignment
 from ..deps import get_current_user
 from ..schemas import (
     AnalysisCountResponse, ProductivityRecordsResponse, ProductRecord,
@@ -20,85 +20,90 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
     response_model=ProductivityRecordsResponse
 )
 def get_productivity_records(
+    product_id: Optional[int] = None,
+    date_start: Optional[str] = None,
+    date_end: Optional[str] = None,
+    region: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ) -> Dict[str, List[ProductRecord]]:
     """
     Returns all productivity records for the current user's tenant using the flat schema.
-    Calculates combined and single productivity based on heuristic keyword matching.
+    Calculates combined and single productivity using centralized data_pipeline classifiers.
     """
     records_dict: Dict[str, List[ProductRecord]] = {}
 
-    products = db.query(Product).filter(
-        Product.organization_id == current_user.organization_id
-    ).all()
+    assigned_ids = None
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(UserProductAssignment).filter(
+            UserProductAssignment.user_id == current_user.id
+        ).all()]
+        if product_id is not None and product_id not in assigned_ids:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
-    # Heuristic keywords
-    output_keywords = ["revenue", "sales", "traffic", "capacity", "units", "produced"]
-    input_keywords = ["cost", "opex", "diesel", "grid", "elec", "fuel", "rent", "kwh", "liters", "hours", "maintenance"]
+    product_query = db.query(Product).filter(
+        Product.organization_id == current_user.organization_id
+    )
+    if assigned_ids is not None:
+        product_query = product_query.filter(Product.id.in_(assigned_ids))
+    products = product_query.all()
 
     for product in products:
         records_dict[product.name] = []
 
-        # Fetch flat records for this product
-        data_records = db.query(ProductDataRecord).filter(
-            ProductDataRecord.organization_id == current_user.organization_id,
-            ProductDataRecord.product_id == product.id
-        ).all()
+    # Fetch flat records
+    query = db.query(ProductDataRecord).filter(
+        ProductDataRecord.organization_id == current_user.organization_id
+    )
+    if product_id is not None:
+        query = query.filter(ProductDataRecord.product_id == product_id)
+    elif assigned_ids is not None:
+        query = query.filter(ProductDataRecord.product_id.in_(assigned_ids))
+        
+    data_records = query.all()
 
-        for record in data_records:
-            mapped_inputs = {}
-            mapped_outputs = {}
-            
-            data_dict = record.data or {}
-            
-            def process_kv_prod(k, v, is_explicit_input=None):
-                try: amt = float(v)
-                except: return
-                k_lower = k.lower()
-                is_output = False
-                if is_explicit_input is False: is_output = True
-                elif is_explicit_input is True: is_output = False
-                else: is_output = any(kw in k_lower for kw in output_keywords)
-                
-                if is_output: mapped_outputs[k] = mapped_outputs.get(k, 0.0) + amt
-                else: mapped_inputs[k] = mapped_inputs.get(k, 0.0) + amt
+    # Apply filters using apply_filters helper
+    from ..data_pipeline import apply_filters, classify_input_output
+    filters = {
+        "tower_id": product_id,
+        "date_start": date_start,
+        "date_end": date_end,
+        "region": region
+    }
+    filtered_records = apply_filters(data_records, filters)
 
-            if "tenants" in data_dict and isinstance(data_dict["tenants"], list):
-                for t in data_dict["tenants"]:
-                    for k, v in t.get("inputs", {}).items(): process_kv_prod(k, v, is_explicit_input=True)
-                    for k, v in t.get("outputs", {}).items(): process_kv_prod(k, v, is_explicit_input=False)
-            else:
-                for key, val in data_dict.items():
-                    process_kv_prod(key, val, is_explicit_input=None)
+    for record in filtered_records:
+        mapped_inputs, mapped_outputs = classify_input_output(record.data or {})
 
-            combined_productivity = None
-            single_productivity = {}
+        combined_productivity = None
+        single_productivity = {}
 
-            total_input = sum(mapped_inputs.values())
-            total_output = sum(mapped_outputs.values())
-            
-            if total_input > 0:
-                combined_productivity = round((total_output / total_input) * 100, 2)
+        total_input = sum(mapped_inputs.values())
+        total_output = sum(mapped_outputs.values())
+        
+        if total_input > 0:
+            combined_productivity = round((total_output / total_input) * 100, 2)
 
-            for in_key, in_val in mapped_inputs.items():
-                for out_key, out_val in mapped_outputs.items():
-                    if in_val > 0:
-                        single_productivity[f"{in_key} / {out_key}"] = round((out_val / in_val) * 100, 2)
-                    else:
-                        single_productivity[f"{in_key} / {out_key}"] = None
+        for in_key, in_val in mapped_inputs.items():
+            for out_key, out_val in mapped_outputs.items():
+                if in_val > 0:
+                    single_productivity[f"{in_key} / {out_key}"] = round((out_val / in_val) * 100, 2)
+                else:
+                    single_productivity[f"{in_key} / {out_key}"] = None
 
-            # Convert month string to pseudo-date for charting if needed, or just pass it directly.
-            # Using month string as the generic 'date' field to avoid breaking frontend schema.
-            combined_record = ProductRecord(
-                calculation_id=record.id,
-                date=record.month,  # Note: reusing 'date' field to store 'month' string
-                inputs=mapped_inputs,
-                outputs=mapped_outputs,
-                combined_productivity=combined_productivity,
-                single_productivity=single_productivity
-            )
-            records_dict[product.name].append(combined_record)
+        combined_record = ProductRecord(
+            calculation_id=record.id,
+            date=record.month,  # reusing 'date' field to store 'month' string
+            inputs=mapped_inputs,
+            outputs=mapped_outputs,
+            combined_productivity=combined_productivity,
+            single_productivity=single_productivity
+        )
+        
+        p_name = record.product.name if record.product else f"Product-{record.product_id}"
+        if p_name not in records_dict:
+            records_dict[p_name] = []
+        records_dict[p_name].append(combined_record)
 
     return records_dict
 
@@ -135,9 +140,20 @@ def aggregate_data(
     """
     Groups data records by month and sums up inputs/outputs using keyword heuristics.
     """
+    assigned_ids = None
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(UserProductAssignment).filter(
+            UserProductAssignment.user_id == current_user.id
+        ).all()]
+        if product_id is not None and product_id not in assigned_ids:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     query = db.query(ProductDataRecord).filter(
         ProductDataRecord.organization_id == current_user.organization_id
     )
+
+    if assigned_ids is not None:
+        query = query.filter(ProductDataRecord.product_id.in_(assigned_ids))
 
     if product_id or sector:
         query = query.join(Product)
@@ -148,14 +164,19 @@ def aggregate_data(
     
     entries = query.all()
 
+    # Apply date/region filters
+    from ..data_pipeline import apply_filters, classify_input_output
+    filters = {
+        "tower_id": product_id,
+        "date_start": start_date.strftime("%Y-%m-%d") if start_date else None,
+        "date_end": end_date.strftime("%Y-%m-%d") if end_date else None,
+    }
+    filtered_entries = apply_filters(entries, filters)
+
     # Aggregation logic
     grouped_data: Dict[str, Dict[str, Any]] = {}
-    
-    # Heuristic keywords
-    output_keywords = ["revenue", "sales", "traffic", "capacity", "units", "produced"]
-    input_keywords = ["cost", "opex", "diesel", "grid", "elec", "fuel", "rent", "kwh", "liters", "hours", "maintenance"]
 
-    for entry in entries:
+    for entry in filtered_entries:
         raw_date_str = entry.month
         label = raw_date_str
         
@@ -175,30 +196,12 @@ def aggregate_data(
         if label not in grouped_data:
             grouped_data[label] = {"inputs": {}, "outputs": {}}
 
-        data_dict = entry.data or {}
+        mapped_inputs, mapped_outputs = classify_input_output(entry.data or {})
 
-        # Helper function for parsing key-values
-        def process_kv_agg(k, v, is_explicit_input=None):
-            try: amt = float(v)
-            except Exception: return
-            k_lower = k.lower()
-            is_output = False
-            if is_explicit_input is False: is_output = True
-            elif is_explicit_input is True: is_output = False
-            else: is_output = any(kw in k_lower for kw in output_keywords)
-            
-            if is_output:
-                grouped_data[label]["outputs"][k] = grouped_data[label]["outputs"].get(k, 0.0) + amt
-            else:
-                grouped_data[label]["inputs"][k] = grouped_data[label]["inputs"].get(k, 0.0) + amt
-
-        if "tenants" in data_dict and isinstance(data_dict["tenants"], list):
-            for t in data_dict["tenants"]:
-                for k, v in t.get("inputs", {}).items(): process_kv_agg(k, v, is_explicit_input=True)
-                for k, v in t.get("outputs", {}).items(): process_kv_agg(k, v, is_explicit_input=False)
-        else:
-            for key, val in data_dict.items():
-                process_kv_agg(key, val, is_explicit_input=None)
+        for k, v in mapped_inputs.items():
+            grouped_data[label]["inputs"][k] = grouped_data[label]["inputs"].get(k, 0.0) + v
+        for k, v in mapped_outputs.items():
+            grouped_data[label]["outputs"][k] = grouped_data[label]["outputs"].get(k, 0.0) + v
 
     # Convert to schema format and calculate productivity
     result_data = []

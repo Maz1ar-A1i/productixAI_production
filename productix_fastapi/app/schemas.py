@@ -64,16 +64,38 @@ class UserResponse(UserBase):
 class OrganizationBase(BaseModel):
     name: str
     subscription_plan: Optional[str] = "free"
+    column_mappings: Optional[Dict[str, str]] = {}
 
 
 class OrganizationCreate(OrganizationBase):
     pass
 
 
+class ColumnRenameRequest(BaseModel):
+    canonical_name: str
+    new_display_name: str
+
+
+class SubscriptionResponse(BaseModel):
+    id: int
+    plan_name: str
+    status: str
+    start_date: datetime
+    end_date: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SubscriptionTimerUpdate(BaseModel):
+    days: int
+
+
 class OrganizationResponse(OrganizationBase):
     id: int
     status: str
     created_at: datetime
+    subscription: Optional[SubscriptionResponse] = None
 
     class Config:
         from_attributes = True
@@ -87,7 +109,12 @@ class ProductBase(BaseModel):
     input_fields: Optional[List[str]] = []  # New field for dynamic input fields
     output_fields: Optional[List[str]] = []
     sector: Optional[str] = "Telecom"
+    region: Optional[str] = None
     organization_id: Optional[int] = None
+    location: Optional[str] = "Urban"
+    customers: Optional[List[str]] = []
+    unit_vars: Optional[List[str]] = []
+    customer_vars: Optional[List[str]] = []
 
 
 class ProductCreate(ProductBase):
@@ -98,6 +125,11 @@ class ProductUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     sector: Optional[str] = "Telecom"
+    region: Optional[str] = None
+    location: Optional[str] = None
+    customers: Optional[List[str]] = None
+    unit_vars: Optional[List[str]] = None
+    customer_vars: Optional[List[str]] = None
 
 
 class ProductResponse(ProductBase):
@@ -117,7 +149,7 @@ class ProductOut(BaseModel):
     name: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class BatchBase(BaseModel):
     batch_number: Optional[str] = None
@@ -145,7 +177,7 @@ class BatchResponse(BatchBase):
     created_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class BatchReportResponse(BaseModel):
     batch_id: int
@@ -169,7 +201,7 @@ class BatchReportResponse(BaseModel):
     per_input_stats: dict[str, dict]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 
@@ -194,7 +226,7 @@ class ShiftEntryBase(BaseModel):
     admin_notes: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # Schema for creating a shift entry
 class ShiftEntryCreate(ShiftEntryBase):
@@ -229,7 +261,7 @@ class ProductivityCalculationResponse(BaseModel):
     single_productivity: Dict[str, float]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # ------------------------
@@ -256,7 +288,7 @@ class AIAnalysisResponse(BaseModel):
     created_at: datetime                   # returning ISO string
 
     class Config:
-        orm_mode = True
+        from_attributes = True
         
 
 # ------------------------
@@ -272,7 +304,7 @@ class ChatbotResponse(BaseModel):
     response: Union[str, Dict[str, Any]]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 class ChatbotHistoryResponse(BaseModel):
     id: int
     organization_id: int
@@ -374,6 +406,7 @@ class FormulaCreate(BaseModel):
     source_table: str      # tower_expenses|tower_revenue|both
     expression_string: str
     output_type: str = "number"  # number|currency|percentage
+    target_column: Optional[str] = None  # which fixed column this formula fills (e.g. "Total Revenue")
 
 
 class FormulaUpdate(BaseModel):
@@ -383,6 +416,7 @@ class FormulaUpdate(BaseModel):
     source_table: Optional[str] = None
     expression_string: Optional[str] = None
     output_type: Optional[str] = None
+    target_column: Optional[str] = None  # which fixed column this formula fills
 
 
 class FormulaResponse(BaseModel):
@@ -395,6 +429,7 @@ class FormulaResponse(BaseModel):
     source_table: str
     expression_string: str
     output_type: str
+    target_column: Optional[str] = None  # which fixed column this formula fills
     is_active: bool
     created_at: Optional[datetime] = None
 
@@ -435,3 +470,147 @@ class ColumnMeta(BaseModel):
 class ColumnsResponse(BaseModel):
     tower_expenses: List[ColumnMeta]
     tower_revenue: List[ColumnMeta]
+
+
+# ------------------------
+# ALERT NOTIFICATIONS
+# ------------------------
+class AlertBase(BaseModel):
+    alert_type: str  # validation_error, data_quality, threshold_breach, logical_error
+    severity: str  # critical, warning, info
+    title: str
+    message: str
+    entity_type: Optional[str] = None  # shift_entry, data_record, product, batch
+    entity_id: Optional[int] = None
+    data_context: Optional[Dict[str, Any]] = None
+
+
+class AlertCreate(AlertBase):
+    user_id: Optional[int] = None
+
+
+class AlertUpdate(BaseModel):
+    is_dismissed: bool = True
+
+
+class AlertResponse(AlertBase):
+    id: int
+    organization_id: int
+    user_id: Optional[int] = None
+    is_dismissed: bool
+    dismissed_at: Optional[datetime] = None
+    dismissed_by: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ValidationResult(BaseModel):
+    is_valid: bool
+    alerts: List[AlertCreate] = []
+    warnings: List[str] = []
+
+
+# Filter schemas and Bulk upload/save schemas
+class FilterParams(BaseModel):
+    tower_id: Optional[Union[int, str]] = None
+    tower_name: Optional[str] = None
+    date_start: Optional[str] = None
+    date_end: Optional[str] = None
+    region: Optional[str] = None
+    recency_days: Optional[int] = None
+    recency_limit: Optional[int] = None
+    sort_order: Optional[str] = "desc"
+
+
+class ChatbotFilteredRequest(BaseModel):
+    query: str
+    bot_type: Optional[str] = "productivity"
+    filters: Optional[FilterParams] = None
+
+
+class BulkDataRecordCreate(BaseModel):
+    tower_id: int
+    tower_name: str
+    city: Optional[str] = ""
+    region: Optional[str] = ""
+    unit_rows: List[Dict[str, Any]]
+    customer_rows: List[Dict[str, Any]]
+    col_map: Optional[Dict[str, str]] = None
+
+
+# ------------------------
+# KPI DEFINITIONS & SNAPSHOTS
+# ------------------------
+class KPIDefinitionCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: str = "operational"
+    unit: str = "%"
+    computation_type: str  # built_in | formula
+    built_in_key: Optional[str] = None
+    formula_id: Optional[int] = None
+    target_value: Optional[float] = None
+    warning_threshold: Optional[float] = None
+    critical_threshold: Optional[float] = None
+    higher_is_better: bool = True
+    granularity: str = "monthly"
+    product_id: Optional[int] = None
+
+
+class KPIDefinitionUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    target_value: Optional[float] = None
+    warning_threshold: Optional[float] = None
+    critical_threshold: Optional[float] = None
+    higher_is_better: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class KPIDefinitionResponse(BaseModel):
+    id: int
+    organization_id: int
+    name: str
+    description: Optional[str] = None
+    category: str
+    unit: str
+    computation_type: str
+    built_in_key: Optional[str] = None
+    formula_id: Optional[int] = None
+    target_value: Optional[float] = None
+    warning_threshold: Optional[float] = None
+    critical_threshold: Optional[float] = None
+    higher_is_better: bool
+    granularity: str
+    product_id: Optional[int] = None
+    is_active: bool
+    created_at: Optional[datetime] = None
+    # Enriched from latest snapshot
+    current_value: Optional[float] = None
+    current_status: Optional[str] = None
+    current_trend: Optional[str] = None
+    change_pct: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+
+class KPISnapshotResponse(BaseModel):
+    id: int
+    kpi_id: int
+    period: str
+    value: Optional[float] = None
+    target_value: Optional[float] = None
+    status: str
+    trend: Optional[str] = None
+    previous_value: Optional[float] = None
+    change_pct: Optional[float] = None
+    computed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+

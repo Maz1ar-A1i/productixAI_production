@@ -39,27 +39,27 @@ def run_all_agents(
     # Add flat product record data as time-series
     try:
         from ..models import ProductDataRecord
+        query = db.query(ProductDataRecord).filter(ProductDataRecord.organization_id == org_id)
+        if current_user.role.value == "org_user":
+            assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+                models.UserProductAssignment.user_id == current_user.id
+            ).all()]
+            query = query.filter(ProductDataRecord.product_id.in_(assigned_ids))
+
         records = (
-            db.query(ProductDataRecord)
-            .filter(ProductDataRecord.organization_id == org_id)
-            .order_by(ProductDataRecord.id.asc())
+            query.order_by(ProductDataRecord.id.asc())
             .limit(100)
             .all()
         )
         
-        output_keywords = ["revenue", "sales", "traffic", "capacity", "units", "produced"]
-        
+        from ..data_pipeline import classify_input_output
+
         series_values = []
         series_records = []
         
         for r in records:
-            data = r.data or {}
-            total_out = 0.0
-            for k, v in data.items():
-                try:
-                    if any(kw in k.lower() for kw in output_keywords):
-                        total_out += float(v)
-                except: continue
+            _, mapped_outputs = classify_input_output(r.data or {})
+            total_out = sum(mapped_outputs.values())
             
             series_values.append(total_out)
             series_records.append({

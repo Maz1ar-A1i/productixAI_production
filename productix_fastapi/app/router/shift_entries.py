@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from .. import models, schemas, database
 from ..deps import get_current_user
+from ..validation_service import ValidationService
 
 router = APIRouter(prefix="/shifts", tags=["Shifts"])
 
@@ -23,6 +24,18 @@ def create_shift_entry(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    batch = db.query(models.Batch).filter(models.Batch.id == entry.batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     # Convert decimals to floats
     entry_data = entry.dict()
     if entry_data.get("input_materials"):
@@ -30,6 +43,20 @@ def create_shift_entry(
     if entry_data.get("output_products"):
         entry_data["output_products"] = decimals_to_float(entry_data["output_products"])
 
+    # Validate the entry data
+    validation_result = ValidationService.validate_shift_entry(entry_data)
+    
+    # Create alerts for any validation issues
+    for alert_data in validation_result.alerts:
+        alert_data.user_id = current_user.id
+        db_alert = models.Alert(
+            organization_id=current_user.organization_id,
+            **alert_data.dict()
+        )
+        db.add(db_alert)
+    
+    # Still save the entry even if there are warnings, but allow critical errors to be saved too
+    # (user can decide to dismiss alerts later)
     db_entry = models.ShiftEntry(
         organization_id=current_user.organization_id,
         **entry_data
@@ -37,6 +64,10 @@ def create_shift_entry(
     db.add(db_entry)
     db.commit()
     db.refresh(db_entry)
+    
+    # Commit alerts after the entry is saved
+    db.commit()
+    
     return db_entry
 
 
@@ -45,9 +76,15 @@ def list_shift_entries(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    return db.query(models.ShiftEntry).filter(
+    query = db.query(models.ShiftEntry).filter(
         models.ShiftEntry.organization_id == current_user.organization_id
-    ).all()
+    )
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()]
+        query = query.join(models.Batch).filter(models.Batch.product_id.in_(assigned_ids))
+    return query.all()
 
 
 @router.get("/{shift_id}", response_model=schemas.ShiftEntryOut)
@@ -62,6 +99,18 @@ def get_shift_entry(
     ).first()
     if not entry:
         raise HTTPException(status_code=404, detail="Shift entry not found")
+
+    if current_user.role.value == "org_user":
+        batch = db.query(models.Batch).filter(models.Batch.id == entry.batch_id).first()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     return entry
 
 
@@ -79,11 +128,35 @@ def update_shift_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="Shift entry not found")
 
+    if current_user.role.value == "org_user":
+        batch = db.query(models.Batch).filter(models.Batch.id == entry.batch_id).first()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     update_data = entry_update.dict(exclude_unset=True)
     if update_data.get("input_materials"):
         update_data["input_materials"] = decimals_to_float(update_data["input_materials"])
     if update_data.get("output_products"):
         update_data["output_products"] = decimals_to_float(update_data["output_products"])
+
+    # Validate the updated entry data
+    validation_result = ValidationService.validate_shift_entry(update_data)
+    
+    # Create alerts for any validation issues
+    for alert_data in validation_result.alerts:
+        alert_data.user_id = current_user.id
+        alert_data.entity_id = shift_id
+        db_alert = models.Alert(
+            organization_id=current_user.organization_id,
+            **alert_data.dict()
+        )
+        db.add(db_alert)
 
     for key, value in update_data.items():
         setattr(entry, key, value)
@@ -106,6 +179,17 @@ def delete_shift_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="Shift entry not found")
 
+    if current_user.role.value == "org_user":
+        batch = db.query(models.Batch).filter(models.Batch.id == entry.batch_id).first()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     db.delete(entry)
     db.commit()
     return {"detail": "Shift entry deleted successfully"}
@@ -124,6 +208,14 @@ def get_product_fields(
 
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     # Return input and output fields directly
     return {

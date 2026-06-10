@@ -92,7 +92,6 @@ const outputOptions = [
   { value: "Machine Utilization Rate", label: "Machine Utilization Rate" },
   { value: "Labor Productivity", label: "Labor Productivity" },
   { value: "Energy Consumption per Unit", label: "Energy Consumption per Unit" },
-  { value: "Cost per Unit", label: "Cost per Unit" },
   { value: "Sales Revenue", label: "Sales Revenue" },
   { value: "On-Time Delivery Rate", label: "On-Time Delivery Rate" },
   { value: "Defect Density", label: "Defect Density" },

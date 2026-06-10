@@ -2,7 +2,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from ..models import User, Product, Batch, ShiftEntry
+from ..models import User, Product, Batch, ShiftEntry, UserProductAssignment
 from ..core_logic import  ai_analysis_for_batch
 from ..schemas import AIAnalysisCreate, BatchResponse, ProductRecord
 from ..deps import get_current_user
@@ -21,9 +21,15 @@ def list_all_org_batches(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    return db.query(models.Batch).filter(
+    query = db.query(models.Batch).filter(
         models.Batch.organization_id == current_user.organization_id
-    ).all()
+    )
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()]
+        query = query.filter(models.Batch.product_id.in_(assigned_ids))
+    return query.all()
 
 
 @router.get("/org", response_model=List[schemas.BatchResponse])
@@ -31,9 +37,17 @@ def get_org_batches(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)  # works for org_admin and org_user
 ):
-    return db.query(models.Batch).filter(
+    query = db.query(models.Batch).filter(
         models.Batch.organization_id == current_user.organization_id
-    ).all()
+    )
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()]
+        query = query.filter(models.Batch.product_id.in_(assigned_ids))
+    return query.all()
+
+
 # ------------------------------------------------
 # Create Batch (org_admin only)
 # ------------------------------------------------
@@ -41,6 +55,14 @@ def get_org_batches(
 def create_batch(batch: schemas.BatchCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     # Ensure organization ID is taken from current user's org
     organization_id = current_user.organization_id
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     # Get last batch for this product in this organization
     last_batch = (
@@ -92,6 +114,14 @@ def list_batches(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     return db.query(models.Batch).filter(
         models.Batch.product_id == product_id,
         models.Batch.organization_id == current_user.organization_id  # ✅ added
@@ -117,6 +147,15 @@ def get_batch(
     )
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     return batch
 
 
@@ -197,6 +236,14 @@ def close_batch(
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
 
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     if batch.status == "closed":
         raise HTTPException(status_code=400, detail="Batch already closed")
 
@@ -226,6 +273,21 @@ def get_shift_trend(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    batch = db.query(models.Batch).filter(
+        models.Batch.id == batch_id,
+        models.Batch.organization_id == current_user.organization_id
+    ).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     entries = (
         db.query(models.ShiftEntry)
         .join(models.Batch)
@@ -280,6 +342,14 @@ def export_batch_excel(
     ).first()
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     entries = db.query(models.ShiftEntry).filter(
         models.ShiftEntry.batch_id == batch.id
@@ -365,6 +435,14 @@ def daily_report(
     ).first()
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     # Fetch all shift entries
     shift_entries = (
@@ -463,6 +541,14 @@ def get_batch_report(
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
 
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     shift_entries = db.query(models.ShiftEntry).filter(
         models.ShiftEntry.batch_id == batch.id
     ).all()
@@ -552,6 +638,14 @@ def close_batch(batch_id: int, db: Session = Depends(get_db), user=Depends(get_c
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
 
+    if user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     if batch.status == "closed":
         raise HTTPException(status_code=400, detail="Batch already closed")
 
@@ -583,6 +677,14 @@ def batch_ai_analysis_endpoint(
     ).first()
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
+
+    if user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == user.id,
+            models.UserProductAssignment.product_id == batch.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     # Fetch all shift entries
     shift_entries = db.query(ShiftEntry).filter(ShiftEntry.batch_id == batch.id).all()

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { authService } from "../services/api";
 import {
   Home, Zap, Mic, BarChart3, Settings, LogOut,
-  ChevronRight, Package, FileUp,
+  ChevronRight, Package,
   MessageCircle, FileText, Users, Radio, ShoppingCart,
-  Shirt, Car, ChevronDown, Cpu, Globe, Calculator, BookOpen, DollarSign
+  Shirt, Car, ChevronDown, Cpu, Globe, Calculator, BookOpen, DollarSign, Activity,
+  Target
 } from "lucide-react";
 
 const Sidebar = () => {
@@ -14,7 +15,9 @@ const Sidebar = () => {
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [productivityOpen, setProductivityOpen] = useState(false);
   const [reportsOpen, setReportsOpen] = useState(false);
+  const [chatbotOpen, setChatbotOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     setRole(authService.getRole());
@@ -115,12 +118,16 @@ const Sidebar = () => {
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto p-3 flex flex-col gap-0.5">
 
-          <SectionLabel label="Co-Pilot" />
-          <NavItem to="/feed" icon={Home} label="Home Feed" exact />
-          <NavItem to="/agents" icon={Zap} label="AI Agents" />
-          <NavItem to="/voice" icon={Mic} label="Voice" />
-          <NavItem to="/goals" icon={BarChart3} label="Goals" />
-          <NavItem to="/auto-mode" icon={Settings} label="Auto Mode" />
+          {role !== "org_admin" && role !== "system_admin" && (
+            <>
+              <SectionLabel label="Co-Pilot" />
+              <NavItem to="/feed" icon={Home} label="Home Feed" exact />
+              <NavItem to="/agents" icon={Zap} label="AI Agents" />
+              <NavItem to="/voice" icon={Mic} label="Voice" />
+              <NavItem to="/goals" icon={BarChart3} label="Goals" />
+              <NavItem to="/auto-mode" icon={Settings} label="Auto Mode" />
+            </>
+          )}
 
           {role !== "org_admin" && (
             <>
@@ -145,19 +152,17 @@ const Sidebar = () => {
             isOpen={productivityOpen}
             onToggle={() => setProductivityOpen(!productivityOpen)}
           >
-            {role === "org_admin" ? (
+            {role === "org_admin" && (
               <>
-                <NavItem to="/tower-manager" icon={Radio} label="Operational Tables" />
+                <NavItem to="/unit-manager" icon={Radio} label="Unit Tables" />
                 <NavItem to="/formula-builder" icon={Calculator} label="Formula Builder" />
                 <NavItem to="/formula-library" icon={BookOpen} label="Formula Library" />
               </>
-            ) : (
-              <>
-                <NavItem to="/tower-data" icon={Radio} label="Operational Data Entry" />
-                <NavItem to="/productivity/excel-upload" icon={FileUp} label="Excel Upload" />
-              </>
             )}
+            <NavItem to="/unit-data" icon={Radio} label={role === "org_admin" ? "Monitor Unit Data" : "Unit Data Entry"} />
           </SubMenu>
+
+          <NavItem to="/kpi" icon={Target} label="KPI Dashboard" />
 
           {role !== "org_admin" && (
             <>
@@ -175,7 +180,19 @@ const Sidebar = () => {
             </>
           )}
 
-          <NavItem to="/chatbot" icon={MessageCircle} label="AI Chatbot" />
+          {role !== "org_admin" && role !== "system_admin" && (
+            <SubMenu
+              icon={MessageCircle}
+              label="AI Chatbots"
+              isOpen={chatbotOpen || location.pathname.startsWith('/chatbot')}
+              onToggle={() => setChatbotOpen(!chatbotOpen)}
+            >
+              <NavItem to="/chatbot/productivity" icon={MessageCircle} label="Productivity Bot" />
+              <NavItem to="/chatbot/energy" icon={Zap} label="Energy Bot" />
+              <NavItem to="/chatbot/hr" icon={Users} label="Hr Bot" />
+              <NavItem to="/chatbot/process" icon={Activity} label="Process Bot" />
+            </SubMenu>
+          )}
 
           {role !== "org_admin" && (
             <>

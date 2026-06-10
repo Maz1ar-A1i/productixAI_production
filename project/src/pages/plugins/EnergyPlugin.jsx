@@ -313,23 +313,23 @@ export default function EnergyPlugin() {
         // Fetch products from Backend
         const prodRes = await api.get('/products/');
         
-        // Fetch towers from LocalStorage
-        const lsTowers = JSON.parse(localStorage.getItem("telco_towers_v1") || "[]").map(t => ({
+        // Fetch units from LocalStorage
+        const lsUnits = JSON.parse(localStorage.getItem("telco_units_v1") || "[]").map(t => ({
           id: `ls_${t.id}`,
           name: `${t.name} (Local)`,
           isLocal: true
         }));
 
-        setProducts([...prodRes.data, ...lsTowers]);
+        setProducts([...prodRes.data, ...lsUnits]);
 
-        // Fetch local tower data (Dictionary structure: { towerId: { towerRows: [], tenantRows: [] } })
-        const allData = JSON.parse(localStorage.getItem("telco_tower_data_v2") || "{}");
+        // Fetch local unit data (Dictionary structure: { unitId: { unitRows: [], customerRows: [] } })
+        const allData = JSON.parse(localStorage.getItem("telco_unit_data_v2") || "{}");
         let flattenedRows = [];
         
         Object.keys(allData).forEach(tId => {
           const fullId = `ls_${tId}`;
           if (!filters.productId || filters.productId === fullId || filters.productId === tId) {
-            const rows = allData[tId].towerRows || [];
+            const rows = allData[tId].unitRows || [];
             flattenedRows = [...flattenedRows, ...rows];
           }
         });
@@ -402,13 +402,13 @@ export default function EnergyPlugin() {
         {/* Filter Bar */}
         <div className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-8 flex flex-wrap gap-6 items-center">
            <div className="flex items-center gap-3">
-              <span className="text-xs font-bold text-white/40 uppercase">Tower / Unit:</span>
+              <span className="text-xs font-bold text-white/40 uppercase">Unit:</span>
               <select 
                 className="bg-transparent text-white font-bold text-sm focus:outline-none"
                 value={filters.productId || ''}
                 onChange={e => setFilters({...filters, productId: e.target.value || null})}
               >
-                <option value="">All Towers</option>
+                <option value="">All Units</option>
                 {products.map(p => <option key={p.id} value={String(p.id)} className="bg-slate-900">{p.name}</option>)}
               </select>
            </div>

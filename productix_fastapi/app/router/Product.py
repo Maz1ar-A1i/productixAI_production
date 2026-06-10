@@ -24,7 +24,12 @@ def create_product(
         organization_id=current_user.organization_id,
         input_fields=product_in.input_fields,
         output_fields=product_in.output_fields,
-        sector=product_in.sector or "Telecom"
+        sector=product_in.sector or "Telecom",
+        region=product_in.region or product_in.description or "",
+        location=product_in.location or "Urban",
+        customers=product_in.customers or [],
+        unit_vars=product_in.unit_vars or [],
+        customer_vars=product_in.customer_vars or []
     )
     db.add(product)
     db.commit()
@@ -40,9 +45,18 @@ def list_products(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(deps.get_current_user)
 ):
-    products = db.query(models.Product).filter(
-        models.Product.organization_id == current_user.organization_id
-    ).all()
+    if current_user.role.value == "org_user":
+        products = db.query(models.Product).join(
+            models.UserProductAssignment,
+            models.Product.id == models.UserProductAssignment.product_id
+        ).filter(
+            models.Product.organization_id == current_user.organization_id,
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()
+    else:
+        products = db.query(models.Product).filter(
+            models.Product.organization_id == current_user.organization_id
+        ).all()
 
     for p in products:
         if isinstance(p.input_fields, str) and p.input_fields:
@@ -61,6 +75,14 @@ def get_product(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(deps.get_current_user)
 ):
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
     product = db.query(models.Product).filter(
         models.Product.id == product_id,
         models.Product.organization_id == current_user.organization_id
@@ -89,6 +111,16 @@ def update_product(
 
     product.name = product_in.name or product.name
     product.description = product_in.description or product.description
+    if product_in.region is not None:
+        product.region = product_in.region
+    if product_in.location is not None:
+        product.location = product_in.location
+    if product_in.customers is not None:
+        product.customers = product_in.customers
+    if product_in.unit_vars is not None:
+        product.unit_vars = product_in.unit_vars
+    if product_in.customer_vars is not None:
+        product.customer_vars = product_in.customer_vars
 
     db.commit()
     db.refresh(product)
@@ -162,6 +194,14 @@ def get_product_fields_and_batches(
     ).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     # Fetch batches for this product
     batches = db.query(models.Batch).filter(

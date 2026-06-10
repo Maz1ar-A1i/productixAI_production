@@ -54,6 +54,7 @@ class Organization(Base):
     name = Column(String(255), nullable=False, unique=True)
     subscription_plan = Column(String(50), default="free")
     status = Column(String(50), default="active")
+    column_mappings = Column(JSON, default={})
     created_at = Column(DateTime, server_default=func.now())
 
     # relationships
@@ -222,7 +223,11 @@ class Product(Base):
     input_fields = Column(JSON, default=[])
     output_fields = Column(JSON, default=[])
     sector = Column(String, default="Telecom")
-
+    region = Column(String, nullable=True)
+    location = Column(String, default="Urban")
+    customers = Column(JSON, default=[])
+    unit_vars = Column(JSON, default=[])
+    customer_vars = Column(JSON, default=[])
 
     organization = relationship("Organization", back_populates="products")
 
@@ -300,6 +305,24 @@ class ShiftEntry(Base):
     organization = relationship("Organization", back_populates="shift_entries")
     batch = relationship("Batch", back_populates="shift_entries")
 
+    @property
+    def total_cost(self) -> float:
+        cost = 0.0
+        inputs = self.input_materials or {}
+        for v in inputs.values():
+            if isinstance(v, dict) and "amount" in v and "unit_price" in v:
+                cost += float(v.get("amount") or 0) * float(v.get("unit_price") or 0)
+        return cost
+
+    @property
+    def output_units(self) -> float:
+        units = 0.0
+        outputs = self.output_products or {}
+        for v in outputs.values():
+            if isinstance(v, dict) and "amount" in v:
+                units += float(v.get("amount") or 0)
+        return units
+
 # ------------------------
 # Product Data Records (flat model replacing Batch+ShiftEntry)
 # ------------------------
@@ -328,20 +351,7 @@ class ProductDataRecord(Base):
 # ------------------------
 
 
-class FileUpload(Base):
-    __tablename__ = "file_uploads"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True) 
-    organization_id = Column(Integer, nullable=False)
-    uploader_id = Column(Integer, nullable=True)
-    file_path = Column(Text, nullable=False)
-    original_filename = Column(Text)
-    status = Column(String, default="uploaded")  # uploaded, validating, processed, failed
-    rows_processed = Column(Integer, default=0)
-    batches_created = Column(Integer, default=0)
-    shifts_created = Column(Integer, default=0)
-    error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    processed_at = Column(DateTime(timezone=True), nullable=True)
+
 
 
 # ------------------------
@@ -360,8 +370,131 @@ class FormulaRecord(Base):
     source_table = Column(String(50), nullable=False)       # tower_expenses|tower_revenue|both
     expression_string = Column(Text, nullable=False)        # e.g. "[KW Sold] / [Total Capacity (KW)] * 100"
     output_type = Column(String(20), default="number")      # number|currency|percentage
+    target_column = Column(String(255), nullable=True)       # which column in data record this formula fills
     is_active = Column(Boolean, default=True)               # soft delete flag
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     organization = relationship("Organization")
     created_by_user = relationship("User", foreign_keys=[created_by])
+
+
+# ------------------------
+# KPI Definitions & Snapshots
+# ------------------------
+class KPIDefinition(Base):
+    """Org-admin defined KPI with target/threshold configuration."""
+    __tablename__ = "kpi_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), default="operational")   # operational|financial|trend|custom
+    unit = Column(String(20), default="%")                  # %, PKR, units, ratio
+
+    # Computation source
+    computation_type = Column(String(50), nullable=False)   # built_in | formula
+    built_in_key = Column(String(100), nullable=True)       # e.g. "capacity_utilization"
+    formula_id = Column(Integer, ForeignKey("formula_records.id"), nullable=True)
+
+    # Targets & Thresholds
+    target_value = Column(Numeric, nullable=True)
+    warning_threshold = Column(Numeric, nullable=True)
+    critical_threshold = Column(Numeric, nullable=True)
+    higher_is_better = Column(Boolean, default=True)
+
+    # Scope
+    granularity = Column(String(20), default="monthly")     # daily|weekly|monthly
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    organization = relationship("Organization")
+    created_by_user = relationship("User", foreign_keys=[created_by])
+    formula = relationship("FormulaRecord", foreign_keys=[formula_id])
+    product = relationship("Product", foreign_keys=[product_id])
+    snapshots = relationship("KPISnapshot", back_populates="kpi_definition", cascade="all, delete-orphan")
+
+
+class KPISnapshot(Base):
+    """Historical KPI value computed at a specific period."""
+    __tablename__ = "kpi_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kpi_id = Column(Integer, ForeignKey("kpi_definitions.id", ondelete="CASCADE"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+
+    period = Column(String(50), nullable=False)          # "2026-05", "2026-W21", "2026-05-25"
+    value = Column(Numeric, nullable=True)
+    target_value = Column(Numeric, nullable=True)
+    status = Column(String(20), default="on_track")      # on_track|warning|critical|no_data
+    trend = Column(String(10), nullable=True)             # up|down|stable
+    previous_value = Column(Numeric, nullable=True)
+    change_pct = Column(Numeric, nullable=True)
+
+    computed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    kpi_definition = relationship("KPIDefinition", back_populates="snapshots")
+    organization = relationship("Organization")
+
+
+class UserProductAssignment(Base):
+    """Junction table linking users to products (units) they are assigned to manage."""
+    __tablename__ = "user_product_assignments"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True)
+
+    user = relationship("User")
+    product = relationship("Product")
+
+
+class Alert(Base):
+    """System and validation alerts generated for organizations and users."""
+    __tablename__ = "alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    alert_type = Column(String(50), nullable=False)
+    severity = Column(String(20), nullable=False)
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    entity_type = Column(String(50), nullable=True)
+    entity_id = Column(Integer, nullable=True)
+    data_context = Column(JSON, nullable=True)
+    is_dismissed = Column(Boolean, default=False)
+    dismissed_at = Column(DateTime, nullable=True)
+    dismissed_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    organization = relationship("Organization")
+    user = relationship("User", foreign_keys=[user_id])
+    dismissed_by_user = relationship("User", foreign_keys=[dismissed_by])
+
+
+# ------------------------
+# Licensing
+# ------------------------
+class License(Base):
+    __tablename__ = "licenses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    license_key = Column(String(255), unique=True, index=True, nullable=False)
+    account_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    role = Column(String(50), nullable=False)  # "global_admin" or "org_admin"
+    status = Column(String(50), default="active", nullable=False)  # "active", "revoked", "expired"
+    expires_at = Column(DateTime, nullable=True)  # Null for global_admin
+    # OTP Machine-Lock: records the first machine that claimed this key (NULL = unbound/fresh)
+    bound_machine_id = Column(String(255), nullable=True, default=None)
+    first_used_at = Column(DateTime, nullable=True, default=None)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", foreign_keys=[account_id])
+    organization = relationship("Organization", foreign_keys=[organization_id])

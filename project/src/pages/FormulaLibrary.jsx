@@ -8,7 +8,7 @@ import { formulaService } from '../services/api';
 
 const TEMPLATE_LABELS = {
   ratio: 'Ratio', percentage: 'Percentage', total: 'Total (Sum)',
-  difference: 'Difference', product: 'Product', cost_per_unit: 'Cost per Unit',
+  difference: 'Difference', product: 'Product',
   margin: 'Margin %', average: 'Average',
 };
 
@@ -81,6 +81,11 @@ export default function FormulaLibrary() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [toast, setToast]               = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
+  const [colMap, setColMap]               = useState({});
+
+  useEffect(() => {
+    try { setColMap(JSON.parse(localStorage.getItem("telco_unit_col_map") || "{}")); } catch {}
+  }, []);
 
   const load = async () => {
     setLoading(true);
@@ -231,7 +236,7 @@ export default function FormulaLibrary() {
                         <span className="badge badge-info" style={{ fontSize: 10 }}>{TEMPLATE_LABELS[f.formula_template] || f.formula_template}</span>
                       </td>
                       <td style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>
-                        {(f.selected_columns || []).join(', ')}
+                        {(f.selected_columns || []).map(c => colMap[c] || c).join(', ')}
                       </td>
                       <td style={{ padding: '12px 14px' }}>
                         <span style={{ fontSize: 11, fontWeight: 700, color: OUTPUT_COLORS[f.output_type] || 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--font-mono)' }}>

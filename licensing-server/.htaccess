@@ -1,0 +1,12 @@
+# .htaccess
+# URL rewrite rules for clean API routing
+
+RewriteEngine On
+
+# Prevent directory listings
+Options -Indexes
+
+# If the request matches api/license/validate, map it transparently to api/validate.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^api/license/validate/?$ api/validate.php [QSA,L]

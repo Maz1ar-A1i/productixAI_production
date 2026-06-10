@@ -30,13 +30,13 @@ const AIAnalysisPage = () => {
       try {
         const res = await api.get("/products/");
         
-        // Load localStorage towers
-        let lsTowers = [];
+        // Load localStorage units
+        let lsUnits = [];
         try {
-          lsTowers = JSON.parse(localStorage.getItem("telco_towers_v1") || "[]");
+          lsUnits = JSON.parse(localStorage.getItem("telco_units_v1") || "[]");
         } catch (e) { console.error("LS load failed", e); }
         
-        const mappedLS = lsTowers.map(t => ({
+        const mappedLS = lsUnits.map(t => ({
           id: `ls_${t.id}`,
           name: t.name,
           isLS: true
@@ -60,14 +60,14 @@ const AIAnalysisPage = () => {
 
     const fetchRecords = async () => {
       if (typeof selectedProduct === 'string' && selectedProduct.startsWith('ls_')) {
-        const towerId = selectedProduct.replace('ls_', '');
+        const unitId = selectedProduct.replace('ls_', '');
         try {
-          const allData = JSON.parse(localStorage.getItem("telco_tower_data_v2") || "{}");
-          const towerData = allData[towerId] || { towerRows: [], tenantRows: [] };
+          const allData = JSON.parse(localStorage.getItem("telco_unit_data_v2") || "{}");
+          const unitData = allData[unitId] || { unitRows: [], customerRows: [] };
           
           const dates = new Set();
-          towerData.towerRows.forEach(r => r.Date && dates.add(r.Date));
-          towerData.tenantRows.forEach(r => r.Date && dates.add(r.Date));
+          unitData.unitRows.forEach(r => r.Date && dates.add(r.Date));
+          unitData.customerRows.forEach(r => r.Date && dates.add(r.Date));
           
           const mappedRecords = Array.from(dates).sort((a,b) => new Date(b) - new Date(a)).map(date => ({
             id: `ls_rec_${date}`,
@@ -106,12 +106,12 @@ const AIAnalysisPage = () => {
       if (typeof selectedRecord === 'string' && selectedRecord.startsWith('ls_rec_')) {
         // ── Handle LocalStorage Analysis ──
         const date = selectedRecord.replace('ls_rec_', '');
-        const towerId = typeof selectedProduct === 'string' ? selectedProduct.replace('ls_', '') : null;
-        const allData = JSON.parse(localStorage.getItem("telco_tower_data_v2") || "{}");
-        const towerData = allData[towerId] || { towerRows: [], tenantRows: [] };
+        const unitId = typeof selectedProduct === 'string' ? selectedProduct.replace('ls_', '') : null;
+        const allData = JSON.parse(localStorage.getItem("telco_unit_data_v2") || "{}");
+        const unitData = allData[unitId] || { unitRows: [], customerRows: [] };
         
-        const dayTowerRow = towerData.towerRows.find(r => r.Date === date) || {};
-        const dayTenantRows = towerData.tenantRows.filter(r => r.Date === date);
+        const dayUnitRow = unitData.unitRows.find(r => r.Date === date) || {};
+        const dayCustomerRows = unitData.customerRows.filter(r => r.Date === date);
 
         let inputs = {};
         let outputs = {};
@@ -129,9 +129,9 @@ const AIAnalysisPage = () => {
           }
         };
 
-        Object.entries(dayTowerRow).forEach(([k, v]) => {
-          if (k.startsWith('tower_')) {
-            const label = k.replace('tower_', '');
+        Object.entries(dayUnitRow).forEach(([k, v]) => {
+          if (k.startsWith('unit_')) {
+            const label = k.replace('unit_', '');
             const isOut = label.toLowerCase().includes('revenue') || 
                           label.toLowerCase().includes('output') || 
                           label.toLowerCase().includes('hr_productivity') ||
@@ -140,10 +140,10 @@ const AIAnalysisPage = () => {
           }
         });
 
-        dayTenantRows.forEach(tr => {
+        dayCustomerRows.forEach(tr => {
           Object.entries(tr).forEach(([k, v]) => {
-            if (k.startsWith('tenant_')) {
-              const label = k.replace('tenant_', '');
+            if (k.startsWith('customer_')) {
+              const label = k.replace('customer_', '');
               const isOut = label.toLowerCase().includes('revenue') || 
                             label.toLowerCase().includes('units') ||
                             label.toLowerCase().includes('hr_productivity') ||

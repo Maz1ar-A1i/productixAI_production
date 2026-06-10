@@ -2,145 +2,119 @@
 // Phase 3: Now calls /api/feed/cards and /api/feed/cards/{id}/act
 // Falls back to rich mock data if backend is unavailable
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 function getAuthHeaders() {
-  const token = localStorage.getItem('productix_token') || localStorage.getItem('token') || '';
+  const token = localStorage.getItem('token') || '';
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
 
-// ── Mock data (used as fallback and seeding) ─────────────────────────────────
+// ── Onboarding / educational fallback cards ──────────────────────────────────
 const MOCK_CARDS = [
   {
-    id: "card-001",
-    type: "alert",
-    priority: "high",
-    agent: "Sales",
-    agentIcon: "💼",
-    sector: "General",
-    timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
-    track: {
-      headline: "Revenue dropped 14% vs yesterday",
-      detail: "Total sales: PKR 284,000 (vs PKR 330,000 yesterday)",
-      metric: { value: "-14%", direction: "down", color: "danger" },
-    },
-    predict: {
-      headline: "Decline likely to continue through tomorrow",
-      confidence: 82,
-      horizon: "24 hours",
-      detail: "Pattern matches 3 previous Q1 dips — recovered within 48 hrs",
-    },
-    action: {
-      headline: "Contact top 5 leads in pipeline",
-      impact: "Potential +PKR 45,000 recovery",
-      steps: ["Open CRM → filter by 'Hot Lead'", "Call within next 2 hours", "Log outcome in system"],
-      autoable: true,
-    },
-  },
-  {
-    id: "card-002",
+    id: "card-welcome-001",
     type: "insight",
-    priority: "high",
-    agent: "Inventory",
-    agentIcon: "📦",
-    sector: "General",
-    timestamp: new Date(Date.now() - 12 * 60000).toISOString(),
-    track: {
-      headline: "Stock critically low — Product A",
-      detail: "Current stock: 47 units. Avg daily consumption: 38 units",
-      metric: { value: "47 units", direction: "down", color: "warning" },
-    },
-    predict: {
-      headline: "Stockout in 1.2 days at current consumption rate",
-      confidence: 94,
-      horizon: "1.2 days",
-      detail: "Demand up 28% this week — standard reorder not sufficient",
-    },
-    action: {
-      headline: "Reorder 800 units from Supplier B now",
-      impact: "Prevents PKR 90,000 in lost sales",
-      steps: ["Generate PO for 800 units", "Send to Supplier B (fastest delivery)", "Expected arrival: 3 days"],
-      autoable: true,
-    },
-  },
-  {
-    id: "card-003",
-    type: "insight",
-    priority: "medium",
-    agent: "Production",
-    agentIcon: "🏭",
-    sector: "General",
-    timestamp: new Date(Date.now() - 25 * 60000).toISOString(),
-    track: {
-      headline: "Machine C efficiency at 67% — below 80% threshold",
-      detail: "Shift 2 output: 340 units vs target 460 units",
-      metric: { value: "67%", direction: "down", color: "warning" },
-    },
-    predict: {
-      headline: "Output gap: ~120 units short by end of shift",
-      confidence: 78,
-      horizon: "6 hours",
-      detail: "Consistent underperformance on Tuesdays — correlates with crew rotation",
-    },
-    action: {
-      headline: "Reassign Operator A to Machine C for this shift",
-      impact: "Recovers ~80 units (PKR 24,000 value)",
-      steps: ["Notify shift supervisor", "Swap Operator A from Machine B", "Monitor for 30 mins"],
-      autoable: false,
-    },
-  },
-  {
-    id: "card-004",
-    type: "prediction",
-    priority: "medium",
-    agent: "Finance",
-    agentIcon: "💰",
-    sector: "General",
-    timestamp: new Date(Date.now() - 40 * 60000).toISOString(),
-    track: {
-      headline: "OPEX running 9% over budget this month",
-      detail: "Actual: PKR 1.24M vs Budget: PKR 1.14M",
-      metric: { value: "+9%", direction: "up", color: "danger" },
-    },
-    predict: {
-      headline: "Month-end overrun: PKR 180,000 if trend continues",
-      confidence: 87,
-      horizon: "18 days",
-      detail: "Fuel costs +31%, energy +12%, maintenance on schedule",
-    },
-    action: {
-      headline: "Reduce diesel consumption — switch to grid during off-peak",
-      impact: "Save PKR 80,000–120,000 this month",
-      steps: ["Identify peak diesel hours", "Schedule grid shift 11pm–5am", "Review vendor fuel contract"],
-      autoable: false,
-    },
-  },
-  {
-    id: "card-005",
-    type: "opportunity",
     priority: "low",
-    agent: "Growth",
-    agentIcon: "📈",
+    agent: "Co-Pilot",
+    agentIcon: "🤖",
+    sector: "General",
+    timestamp: new Date(Date.now() - 1 * 60000).toISOString(),
+    track: {
+      headline: "Welcome to your AI Co-Pilot Feed!",
+      detail: "This feed aggregates real-time insights from your organisation's data.",
+      metric: { value: "✓", direction: "stable", color: "accent" },
+    },
+    predict: {
+      headline: "Once data flows in, AI-driven predictions appear here",
+      confidence: 100,
+      horizon: "—",
+      detail: "Start by entering operational data in the Unit Table to unlock insights.",
+    },
+    action: {
+      headline: "Go to Operational Data Entry to start",
+      impact: "Unlocks personalised insights and KPI alerts",
+      steps: ["Navigate to the Unit Table page", "Enter your first data record", "Come back here to see live insights"],
+      autoable: false,
+    },
+  },
+  {
+    id: "card-tip-kpi-002",
+    type: "insight",
+    priority: "low",
+    agent: "Tips",
+    agentIcon: "💡",
+    sector: "General",
+    timestamp: new Date(Date.now() - 10 * 60000).toISOString(),
+    track: {
+      headline: "Tip: Configure KPI thresholds for smart alerts",
+      detail: "Set target, warning, and critical levels on each KPI to receive automated alerts.",
+      metric: { value: "💡", direction: "stable", color: "accent" },
+    },
+    predict: {
+      headline: "Well-tuned thresholds reduce alert noise by ~60%",
+      confidence: 90,
+      horizon: "—",
+      detail: "Review thresholds quarterly for best results.",
+    },
+    action: {
+      headline: "Open KPI Dashboard → Edit any KPI → Set thresholds",
+      impact: "Receive timely warnings before problems escalate",
+      steps: ["Go to KPI Dashboard", "Click a KPI card to edit", "Set target, warning, and critical values"],
+      autoable: false,
+    },
+  },
+  {
+    id: "card-tip-formula-003",
+    type: "insight",
+    priority: "low",
+    agent: "Tips",
+    agentIcon: "🧮",
+    sector: "General",
+    timestamp: new Date(Date.now() - 30 * 60000).toISOString(),
+    track: {
+      headline: "Tip: Custom formulas keep your metrics consistent",
+      detail: "Build formulas in the Formula Builder — renaming a variable updates it everywhere.",
+      metric: { value: "💡", direction: "stable", color: "accent" },
+    },
+    predict: {
+      headline: "Formulas auto-recalculate when underlying data changes",
+      confidence: 95,
+      horizon: "—",
+      detail: "Promote any formula to a tracked KPI for continuous monitoring.",
+    },
+    action: {
+      headline: "Open Formula Builder → Create your first formula",
+      impact: "Automates calculations and eliminates manual errors",
+      steps: ["Go to Formula Builder", "Select variables from your Unit Table", "Define an expression and save"],
+      autoable: false,
+    },
+  },
+  {
+    id: "card-demo-sim-004",
+    type: "prediction",
+    priority: "low",
+    agent: "Demo Simulation",
+    agentIcon: "🧪",
     sector: "General",
     timestamp: new Date(Date.now() - 60 * 60000).toISOString(),
     track: {
-      headline: "Customer segment B up 34% this quarter",
-      detail: "Segment B orders: 2,840 units (vs 2,120 last quarter)",
-      metric: { value: "+34%", direction: "up", color: "accent" },
+      headline: "[Demo Simulation] Budget overrun detected",
+      detail: "This is a simulated example. Real alerts appear when you configure KPIs with live data.",
+      metric: { value: "+9%", direction: "up", color: "warning" },
     },
     predict: {
-      headline: "Segment B projected to be your #1 revenue source by Q3",
-      confidence: 71,
-      horizon: "3 months",
-      detail: "Growth driven by product line X — 3 competitors exited this segment",
+      headline: "[Simulated] Month-end overrun if trend continues",
+      confidence: 87,
+      horizon: "—",
+      detail: "This card demonstrates how AI predicts future outcomes from historical patterns.",
     },
     action: {
-      headline: "Increase Segment B marketing budget by 15%",
-      impact: "Potential PKR 320,000 additional quarterly revenue",
-      steps: ["Reallocate 15% from Segment A budget", "Launch targeted campaign", "Track conversion rate"],
+      headline: "[Simulated] Reduce costs by switching to off-peak energy",
+      impact: "Demonstrates AI-suggested corrective actions",
+      steps: ["This is a demo action step", "Real actions come from your data", "Configure KPIs to see real insights"],
       autoable: false,
     },
   },

@@ -21,6 +21,17 @@ def run_ai_agent(
 ):
     records_dict = request.records  # Already a dict keyed by product_name
 
+    if current_user.role.value == "org_user":
+        assigned_names = [p.name for p in db.query(models.Product).join(
+            models.UserProductAssignment,
+            models.Product.id == models.UserProductAssignment.product_id
+        ).filter(
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()]
+        for p_name in records_dict.keys():
+            if p_name not in assigned_names:
+                raise HTTPException(status_code=403, detail=f"You do not have access to run report on unit: {p_name}")
+
     # Generate AI report
     try:
         result = get_ai_agent_report(records_dict, request.goal)

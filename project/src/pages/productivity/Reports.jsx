@@ -36,18 +36,18 @@ const Reports = () => {
     // 1. Fetch backend products
     api.get("/products/")
       .then((res) => {
-        // 2. Load localStorage towers (Operational Tables)
-        let lsTowers = [];
+        // 2. Load localStorage units (Operational Tables)
+        let lsUnits = [];
         try {
-          lsTowers = JSON.parse(localStorage.getItem("telco_towers_v1") || "[]");
+          lsUnits = JSON.parse(localStorage.getItem("telco_units_v1") || "[]");
         } catch (e) { console.error("LS load failed", e); }
         
-        // Map LS towers to match backend product structure, prefix ID to distinguish
-        const mappedLS = lsTowers.map(t => ({
+        // Map LS units to match backend product structure, prefix ID to distinguish
+        const mappedLS = lsUnits.map(t => ({
           id: `ls_${t.id}`,
           name: t.name,
           isLS: true,
-          towerData: t
+          unitData: t
         }));
 
         setProducts([...res.data, ...mappedLS]);
@@ -59,22 +59,22 @@ const Reports = () => {
     if (selectedProduct) {
       if (typeof selectedProduct === 'string' && selectedProduct.startsWith('ls_')) {
         // Handle localStorage records
-        const towerId = selectedProduct.replace('ls_', '');
+        const unitId = selectedProduct.replace('ls_', '');
         try {
-          const allData = JSON.parse(localStorage.getItem("telco_tower_data_v2") || "{}");
-          const towerData = allData[towerId] || { towerRows: [], tenantRows: [] };
+          const allData = JSON.parse(localStorage.getItem("telco_unit_data_v2") || "{}");
+          const unitData = allData[unitId] || { unitRows: [], customerRows: [] };
           
           // Get unique dates as "records"
           const dates = new Set();
-          towerData.towerRows.forEach(r => r.Date && dates.add(r.Date));
-          towerData.tenantRows.forEach(r => r.Date && dates.add(r.Date));
+          unitData.unitRows.forEach(r => r.Date && dates.add(r.Date));
+          unitData.customerRows.forEach(r => r.Date && dates.add(r.Date));
           
           const mappedRecords = Array.from(dates).sort((a,b) => new Date(b) - new Date(a)).map(date => ({
             id: `ls_rec_${date}`,
             month: date, // Using date as the label
             isLS: true,
             date: date,
-            towerId: towerId
+            unitId: unitId
           }));
           setRecords(mappedRecords);
         } catch (e) {
@@ -100,14 +100,14 @@ const Reports = () => {
       if (typeof selectedRecord === 'string' && selectedRecord.startsWith('ls_rec_')) {
         // Calculate report from localStorage data
         const date = selectedRecord.replace('ls_rec_', '');
-        const towerId = typeof selectedProduct === 'string' ? selectedProduct.replace('ls_', '') : null;
+        const unitId = typeof selectedProduct === 'string' ? selectedProduct.replace('ls_', '') : null;
         
         try {
-          const allData = JSON.parse(localStorage.getItem("telco_tower_data_v2") || "{}");
-          const towerData = allData[towerId] || { towerRows: [], tenantRows: [] };
+          const allData = JSON.parse(localStorage.getItem("telco_unit_data_v2") || "{}");
+          const unitData = allData[unitId] || { unitRows: [], customerRows: [] };
           
-          const dayTowerRow = towerData.towerRows.find(r => r.Date === date) || {};
-          const dayTenantRows = towerData.tenantRows.filter(r => r.Date === date);
+          const dayUnitRow = unitData.unitRows.find(r => r.Date === date) || {};
+          const dayCustomerRows = unitData.customerRows.filter(r => r.Date === date);
           
           // Flatten into totals
           let totals = {};
@@ -115,10 +115,10 @@ const Reports = () => {
           let total_output = 0;
           let per_input_stats = {};
 
-          // Process tower vars
-          Object.entries(dayTowerRow).forEach(([k, v]) => {
-            if (k.startsWith('tower_')) {
-              const label = k.replace('tower_', '');
+          // Process unit vars
+          Object.entries(dayUnitRow).forEach(([k, v]) => {
+            if (k.startsWith('unit_')) {
+              const label = k.replace('unit_', '');
               const val = Number(v) || 0;
               totals[label] = val;
               // Heuristic: if it looks like cost, add to input cost
@@ -130,11 +130,11 @@ const Reports = () => {
             }
           });
 
-          // Process tenant vars
-          dayTenantRows.forEach(tr => {
+          // Process customer vars
+          dayCustomerRows.forEach(tr => {
             Object.entries(tr).forEach(([k, v]) => {
-              if (k.startsWith('tenant_')) {
-                const label = k.replace('tenant_', '');
+              if (k.startsWith('customer_')) {
+                const label = k.replace('customer_', '');
                 const val = Number(v) || 0;
                 totals[label] = (totals[label] || 0) + val;
                 if (label.toLowerCase().includes('cost')) total_input_cost += val;

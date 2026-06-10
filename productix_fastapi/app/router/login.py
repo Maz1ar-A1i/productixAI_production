@@ -21,7 +21,16 @@ async def login(credentials: LoginSchema, db: Session = Depends(get_db)):
     )
 
     # Verify user existence and password
-    if not user or not verify_password(credentials.password, user.password_hash):
+    if not user:
+        print(f"[LOGIN FAILED] User not found: {credentials.email}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    if not verify_password(credentials.password, user.password_hash):
+        print(f"[LOGIN FAILED] Invalid password for user: {credentials.email}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -30,6 +39,7 @@ async def login(credentials: LoginSchema, db: Session = Depends(get_db)):
 
     # Require email verification
     if not getattr(user, "is_verified", False):
+        print(f"[LOGIN FAILED] Email not verified for user: {credentials.email}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email not verified. Please check your inbox.",
@@ -37,7 +47,11 @@ async def login(credentials: LoginSchema, db: Session = Depends(get_db)):
         )
 
     # Check user account active status
-    if getattr(user, "is_active", True) is False:
+    # Note: If is_active is a string (due to schema swap), this might evaluate unexpectedly
+    is_active_val = getattr(user, "is_active", True)
+    print(f"[LOGIN DEBUG] User {credentials.email} is_active = {repr(is_active_val)}")
+    if is_active_val is False:
+        print(f"[LOGIN FAILED] Account deactivated for user: {credentials.email}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account deactivated",
@@ -46,7 +60,21 @@ async def login(credentials: LoginSchema, db: Session = Depends(get_db)):
 
     # Check organization status only for non-system-admin users
     if user.role != UserRole.system_admin:
-        if not user.organization or user.organization.status != "active":
+        org = user.organization
+        if not org:
+             raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Organization not found.",
+            )
+            
+        # Check for subscription expiration
+        if org.subscription and org.subscription.end_date:
+            if org.subscription.end_date < datetime.utcnow():
+                org.status = "disabled"
+                db.commit()
+                # No need to refresh, just proceed to block
+        
+        if org.status != "active":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Package expired. Please renew your subscription.",

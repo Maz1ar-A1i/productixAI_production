@@ -43,6 +43,15 @@ const Login = () => {
         }
       }
 
+      // ✅ Refresh the license status in context before navigating!
+      if (window.refreshLicenseStatus) {
+        try {
+          await window.refreshLicenseStatus();
+        } catch (refreshErr) {
+          console.error("Failed to refresh license status after login:", refreshErr);
+        }
+      }
+
       // ✅ Decide redirect based on role
       const role = res.role || localStorage.getItem("role");
 

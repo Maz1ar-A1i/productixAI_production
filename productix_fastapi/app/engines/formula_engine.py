@@ -17,46 +17,46 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # ── Fixed Column Definitions ─────────────────────────────────────────────────
 
-TOWER_EXPENSES_COLUMNS = {
+UNIT_EXPENSES_COLUMNS = {
     # Text columns — cannot be used as formula operands
-    "Date":                  {"type": "date",      "eligible": False, "table": "tower_expenses"},
-    "Tower ID":              {"type": "text",      "eligible": False, "table": "tower_expenses"},
-    "Tower Name":            {"type": "text",      "eligible": False, "table": "tower_expenses"},
-    "City":                  {"type": "text",      "eligible": False, "table": "tower_expenses"},
+    "Date":                  {"type": "date",      "eligible": False, "table": "unit_expenses"},
+    "Unit ID":              {"type": "text",      "eligible": False, "table": "unit_expenses"},
+    "Unit Name":            {"type": "text",      "eligible": False, "table": "unit_expenses"},
+    "City":                  {"type": "text",      "eligible": False, "table": "unit_expenses"},
     # Numeric columns — formula-eligible
-    "Fuel Cost":             {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "WAPDA Cost":            {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "HR Cost":               {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Rent":                  {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Other Costs":           {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Total Capacity (KW)":   {"type": "number",    "eligible": True,  "table": "tower_expenses"},
-    "KW Produced":           {"type": "number",    "eligible": True,  "table": "tower_expenses"},
-    "KW Sold":               {"type": "number",    "eligible": True,  "table": "tower_expenses"},
-    "Attached Tenants":      {"type": "number",    "eligible": True,  "table": "tower_expenses"},
-    "Max Tenants":           {"type": "number",    "eligible": True,  "table": "tower_expenses"},
-    "Total OPEX":            {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Daily Cost":            {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Monthly OPEX":          {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Capacity Utilization %":{"type": "percent",   "eligible": True,  "table": "tower_expenses"},
-    "Idle Capacity (KW)":    {"type": "number",    "eligible": True,  "table": "tower_expenses"},
-    "Cost per KW":           {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Tenant Utilization %":  {"type": "percent",   "eligible": True,  "table": "tower_expenses"},
-    "Total Revenue":         {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Profit":                {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
-    "Idle Capacity Value":   {"type": "currency",  "eligible": True,  "table": "tower_expenses"},
+    "Fuel Cost":             {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "WAPDA Cost":            {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "HR Cost":               {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Rent":                  {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Other Costs":           {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Total Capacity (KW)":   {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "KW Produced":           {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "KW Sold":               {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Attached Customers":    {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Max Customers":         {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Total OPEX":            {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Daily Cost":            {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Monthly OPEX":          {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Capacity Utilization":  {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Idle Capacity (KW)":    {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Cost per KW":           {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Customer Utilization":  {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Total Revenue":         {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Profit":                {"type": "number",    "eligible": True,  "table": "unit_expenses"},
+    "Idle Capacity Value":   {"type": "number",    "eligible": True,  "table": "unit_expenses"},
 }
 
-TOWER_REVENUE_COLUMNS = {
-    "Date":             {"type": "date",     "eligible": False, "table": "tower_revenue"},
-    "Tenant Name":      {"type": "text",     "eligible": False, "table": "tower_revenue"},
-    "Tower ID":         {"type": "text",     "eligible": False, "table": "tower_revenue"},
-    "KW Sold":          {"type": "number",   "eligible": True,  "table": "tower_revenue"},
-    "Price per KW":     {"type": "currency", "eligible": True,  "table": "tower_revenue"},
-    "Daily Revenue":    {"type": "currency", "eligible": True,  "table": "tower_revenue"},
-    "Monthly Revenue":  {"type": "currency", "eligible": True,  "table": "tower_revenue"},
+UNIT_REVENUE_COLUMNS = {
+    "Date":             {"type": "date",     "eligible": False, "table": "unit_revenue"},
+    "Customer Name":    {"type": "text",     "eligible": False, "table": "unit_revenue"},
+    "Unit ID":         {"type": "text",     "eligible": False, "table": "unit_revenue"},
+    "KW Sold":          {"type": "number",   "eligible": True,  "table": "unit_revenue"},
+    "Price per KW":     {"type": "number",   "eligible": True,  "table": "unit_revenue"},
+    "Daily Revenue":    {"type": "number",   "eligible": True,  "table": "unit_revenue"},
+    "Monthly Revenue":  {"type": "number",   "eligible": True,  "table": "unit_revenue"},
 }
 
-ALL_COLUMNS: Dict[str, Dict] = {**TOWER_EXPENSES_COLUMNS, **TOWER_REVENUE_COLUMNS}
+ALL_COLUMNS: Dict[str, Dict] = {**UNIT_EXPENSES_COLUMNS, **UNIT_REVENUE_COLUMNS}
 
 # Case-insensitive lookup
 ALL_COLUMNS_LOWER: Dict[str, str] = {k.lower(): k for k in ALL_COLUMNS}
@@ -70,7 +70,6 @@ FORMULA_TEMPLATES = {
     "total":         {"label": "Total (Sum)",    "pattern": "A + B + …",           "min_cols": 2, "output_type": "number"},
     "difference":    {"label": "Difference",     "pattern": "A − B",               "min_cols": 2, "output_type": "number"},
     "product":       {"label": "Product",        "pattern": "A × B",               "min_cols": 2, "output_type": "number"},
-    "cost_per_unit": {"label": "Cost per Unit",  "pattern": "A / B",               "min_cols": 2, "output_type": "currency"},
     "margin":        {"label": "Margin %",       "pattern": "(A − B) / A × 100",   "min_cols": 2, "output_type": "percentage"},
     "average":       {"label": "Average",        "pattern": "(A + B + …) / Count", "min_cols": 2, "output_type": "number"},
 }
@@ -96,8 +95,6 @@ def build_expression(template: str, columns: List[str]) -> str:
         return f"{cols[0]} - {cols[1]}"
     elif template == "product":
         return f"{cols[0]} * {cols[1]}"
-    elif template == "cost_per_unit":
-        return f"{cols[0]} / {cols[1]}"
     elif template == "margin":
         return f"({cols[0]} - {cols[1]}) / {cols[0]} * 100"
     elif template == "average":

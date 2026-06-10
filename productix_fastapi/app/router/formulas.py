@@ -17,7 +17,7 @@ from ..schemas import (
     ColumnsResponse, ColumnMeta,
 )
 from ..engines.formula_engine import (
-    ALL_COLUMNS, TOWER_EXPENSES_COLUMNS, TOWER_REVENUE_COLUMNS,
+    ALL_COLUMNS, UNIT_EXPENSES_COLUMNS, UNIT_REVENUE_COLUMNS,
     FORMULA_TEMPLATES, build_expression, validate_columns,
     validate_expression, evaluate_formula_on_dataset,
 )
@@ -44,13 +44,13 @@ def get_columns(current_user: User = Depends(get_current_user)):
     """
     te_cols = [
         ColumnMeta(name=k, type=v["type"], eligible=v["eligible"], table=v["table"])
-        for k, v in TOWER_EXPENSES_COLUMNS.items()
+        for k, v in UNIT_EXPENSES_COLUMNS.items()
     ]
     tr_cols = [
         ColumnMeta(name=k, type=v["type"], eligible=v["eligible"], table=v["table"])
-        for k, v in TOWER_REVENUE_COLUMNS.items()
+        for k, v in UNIT_REVENUE_COLUMNS.items()
     ]
-    return ColumnsResponse(tower_expenses=te_cols, tower_revenue=tr_cols)
+    return ColumnsResponse(unit_expenses=te_cols, unit_revenue=tr_cols)
 
 
 # ── GET /templates  ───────────────────────────────────────────────────────────
@@ -113,10 +113,10 @@ def preview_formula(
         "Total OPEX": 150000,
         "Daily Cost": 5000,
         "Monthly OPEX": 150000,
-        "Capacity Utilization %": 60,
+        "Capacity Utilization": 60,
         "Idle Capacity (KW)": 40,
         "Cost per KW": 2500,
-        "Tenant Utilization %": 60,
+        "Tenant Utilization": 60,
         "Total Revenue": 300000,
         "Profit": 150000,
         "Idle Capacity Value": 20000,
@@ -171,30 +171,37 @@ def create_formula(
     if not valid:
         raise HTTPException(status_code=422, detail=err)
 
-    # Check unique formula name per org
-    existing = db.query(FormulaRecord).filter(
-        FormulaRecord.organization_id == current_user.organization_id,
-        FormulaRecord.formula_name == payload.formula_name,
-        FormulaRecord.is_active == True,
-    ).first()
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"A formula named '{payload.formula_name}' already exists. Please choose a different name."
-        )
-
     # Determine source_table from columns
-    te_names = {k.lower() for k in TOWER_EXPENSES_COLUMNS}
-    tr_names = {k.lower() for k in TOWER_REVENUE_COLUMNS}
+    te_names = {k.lower() for k in UNIT_EXPENSES_COLUMNS}
+    tr_names = {k.lower() for k in UNIT_REVENUE_COLUMNS}
     col_lower = {c.lower() for c in payload.selected_columns}
     has_te = bool(col_lower & te_names)
     has_tr = bool(col_lower & tr_names)
     if has_te and has_tr:
         source_table = "both"
     elif has_tr:
-        source_table = "tower_revenue"
+        source_table = "unit_revenue"
     else:
-        source_table = "tower_expenses"
+        source_table = "unit_expenses"
+
+    # Check if a formula is already applied to this target_column in the organization
+    if payload.target_column:
+        existing_by_target = db.query(FormulaRecord).filter(
+            FormulaRecord.organization_id == current_user.organization_id,
+            FormulaRecord.target_column == payload.target_column,
+            FormulaRecord.is_active == True,
+        ).first()
+        if existing_by_target:
+            # Overwrite/update the existing formula targeting the same column
+            existing_by_target.formula_name = payload.formula_name
+            existing_by_target.formula_template = payload.formula_template
+            existing_by_target.selected_columns = payload.selected_columns
+            existing_by_target.source_table = source_table
+            existing_by_target.expression_string = payload.expression_string
+            existing_by_target.output_type = payload.output_type
+            db.commit()
+            db.refresh(existing_by_target)
+            return existing_by_target
 
     formula = FormulaRecord(
         organization_id=current_user.organization_id,
@@ -205,6 +212,7 @@ def create_formula(
         source_table=source_table,
         expression_string=payload.expression_string,
         output_type=payload.output_type,
+        target_column=payload.target_column,
     )
     db.add(formula)
     db.commit()
@@ -223,10 +231,13 @@ def list_formulas(
     Returns all active formulas for the current user's organisation.
     Accessible to all authenticated users (for dashboard display).
     """
-    formulas = db.query(FormulaRecord).filter(
+    query = db.query(FormulaRecord).filter(
         FormulaRecord.organization_id == current_user.organization_id,
         FormulaRecord.is_active == True,
-    ).order_by(FormulaRecord.created_at.desc()).all()
+    )
+    if current_user.role.value == "org_admin":
+        query = query.filter(FormulaRecord.created_by == current_user.id)
+    formulas = query.order_by(FormulaRecord.created_at.desc()).all()
     return formulas
 
 
@@ -267,15 +278,6 @@ def update_formula(
 
     # Apply updates
     if payload.formula_name is not None:
-        # Check name uniqueness (excluding self)
-        dup = db.query(FormulaRecord).filter(
-            FormulaRecord.organization_id == current_user.organization_id,
-            FormulaRecord.formula_name == payload.formula_name,
-            FormulaRecord.is_active == True,
-            FormulaRecord.id != formula_id,
-        ).first()
-        if dup:
-            raise HTTPException(status_code=409, detail=f"Name '{payload.formula_name}' is already taken.")
         formula.formula_name = payload.formula_name
 
     if payload.formula_template is not None:
@@ -295,6 +297,17 @@ def update_formula(
         formula.source_table = payload.source_table
     if payload.output_type is not None:
         formula.output_type = payload.output_type
+    if payload.target_column is not None:
+        if payload.target_column:
+            other = db.query(FormulaRecord).filter(
+                FormulaRecord.organization_id == current_user.organization_id,
+                FormulaRecord.target_column == payload.target_column,
+                FormulaRecord.is_active == True,
+                FormulaRecord.id != formula_id,
+            ).first()
+            if other:
+                other.is_active = False
+        formula.target_column = payload.target_column
 
     db.commit()
     db.refresh(formula)
@@ -394,12 +407,47 @@ def evaluate_formula(
     query = db.query(ProductDataRecord).filter(
         ProductDataRecord.organization_id == current_user.organization_id
     )
+    if current_user.role.value == "org_user":
+        from ..models import UserProductAssignment
+        assigned_ids = [a.product_id for a in db.query(UserProductAssignment).filter(
+            UserProductAssignment.user_id == current_user.id
+        ).all()]
+        
+        if payload.tower_id:
+            try:
+                tid = int(payload.tower_id)
+                if tid not in assigned_ids:
+                    raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+            except ValueError:
+                product = db.query(Product).filter(
+                    Product.organization_id == current_user.organization_id,
+                    Product.name == payload.tower_id
+                ).first()
+                if not product or product.id not in assigned_ids:
+                    raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+        
+        query = query.filter(ProductDataRecord.product_id.in_(assigned_ids))
+
     records = query.all()
 
     # Flatten each record's data dict into rows for evaluation
+    from ..engines.kpi_engine import _flatten_record_data
     data_rows = []
     for rec in records:
-        row = dict(rec.data or {})
+        row = _flatten_record_data(rec.data or {})
+        # Ensure parameters are available at the top-level of the row for filtering
+        if rec.data and "parameters" in rec.data:
+            params = rec.data["parameters"]
+            row["Date"] = params.get("date", rec.month)
+            row["City"] = params.get("city", "")
+            row["Tower Name"] = params.get("towerName", "")
+        else:
+            row["Date"] = rec.month
+            if rec.product:
+                row["Tower Name"] = rec.product.name
+                row["City"] = rec.product.description
+        row["Tower ID"] = str(rec.product_id)
+
         # Apply filters
         if payload.tower_id and row.get("Tower ID") != payload.tower_id:
             continue
@@ -458,13 +506,49 @@ def evaluate_all_formulas(
     ).all()
 
     # Fetch all records once
-    records = db.query(ProductDataRecord).filter(
+    query = db.query(ProductDataRecord).filter(
         ProductDataRecord.organization_id == current_user.organization_id
-    ).all()
+    )
+    if current_user.role.value == "org_user":
+        from ..models import UserProductAssignment
+        assigned_ids = [a.product_id for a in db.query(UserProductAssignment).filter(
+            UserProductAssignment.user_id == current_user.id
+        ).all()]
+        
+        if tower_id:
+            try:
+                tid = int(tower_id)
+                if tid not in assigned_ids:
+                    raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+            except ValueError:
+                product = db.query(Product).filter(
+                    Product.organization_id == current_user.organization_id,
+                    Product.name == tower_id
+                ).first()
+                if not product or product.id not in assigned_ids:
+                    raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+        
+        query = query.filter(ProductDataRecord.product_id.in_(assigned_ids))
 
+    records = query.all()
+
+    from ..engines.kpi_engine import _flatten_record_data
     data_rows = []
     for rec in records:
-        row = dict(rec.data or {})
+        row = _flatten_record_data(rec.data or {})
+        # Ensure parameters are available at the top-level of the row for filtering
+        if rec.data and "parameters" in rec.data:
+            params = rec.data["parameters"]
+            row["Date"] = params.get("date", rec.month)
+            row["City"] = params.get("city", "")
+            row["Tower Name"] = params.get("towerName", "")
+        else:
+            row["Date"] = rec.month
+            if rec.product:
+                row["Tower Name"] = rec.product.name
+                row["City"] = rec.product.description
+        row["Tower ID"] = str(rec.product_id)
+
         if tower_id and row.get("Tower ID") != tower_id:
             continue
         if city and row.get("City") != city:

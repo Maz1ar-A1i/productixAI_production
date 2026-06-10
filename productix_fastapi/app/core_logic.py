@@ -37,12 +37,15 @@ def _generate_with_retry(client, model, messages, system_instruction=None):
                 continue
             raise e
 
-# ✅ Robustly load .env from current folder, parent, or root
+# ✅ Robustly load .env from current folder, parent, root, or exe directory
+import sys
 current_dir = Path(__file__).parent
 env_paths = [
     current_dir / ".env",          # app/.env
     current_dir.parent / ".env",   # root/.env
 ]
+if getattr(sys, 'frozen', False):
+    env_paths.append(Path(sys.executable).parent / ".env")
 
 for env_path in env_paths:
     if env_path.exists():
@@ -79,7 +82,33 @@ def _format_records_for_ai(records: dict) -> str:
 
             context += f"--- Record {record_count} (Product: {product_name}, ID: {record_id}) ---\n"
             context += f"Month: {month}\n"
-            context += "Data JSON: " + json.dumps(data) + "\n\n"
+            
+            if "unit_data" in data or "customer_data" in data:
+                from .data_pipeline import parse_legacy_record
+                normalised = parse_legacy_record(data)
+                params = normalised.get("parameters", {})
+                unit_data = normalised.get("unit_data", {})
+                customer_data = normalised.get("customer_data", [])
+                
+                context += f"  Tower: {params.get('towerName', 'N/A')} | City: {params.get('city', 'N/A')} | Region: {params.get('region', 'N/A')}\n"
+                context += f"  Unit Metrics: {json.dumps(unit_data)}\n"
+                if customer_data:
+                    context += "  Customer Data:\n"
+                    for c in customer_data:
+                        c_name = c.get("name", "Unknown")
+                        c_metrics = {k: v for k, v in c.items() if k != "name"}
+                        context += f"    * Customer: {c_name} | {json.dumps(c_metrics)}\n"
+            elif "tenants" in data and isinstance(data["tenants"], list):
+                context += "Tenants Data:\n"
+                for t in data["tenants"]:
+                    context += f"  * Tenant: {t.get('name', 'Unknown')}\n"
+                    context += f"    - Inputs: {json.dumps(t.get('inputs', {}))}\n"
+                    context += f"    - Outputs: {json.dumps(t.get('outputs', {}))}\n"
+                if "totalTowerRevenue" in data:
+                    context += f"  Total Tower Revenue: {data['totalTowerRevenue']}\n"
+            else:
+                context += "Data JSON: " + json.dumps(data) + "\n"
+            context += "\n"
 
             record_count += 1
 
@@ -207,15 +236,44 @@ def format_records_for_ai1(records: dict):
         formatted.append("🧩 Products:")
         for p in records["products"]:
             name = p.get("name") or f"Product-{p.get('id', 'N/A')}"
-            formatted.append(f"  - {name} | Sector: {p.get('sector', 'N/A')} | Description: {p.get('description', 'N/A')}")
+            region_str = f" | Region: {p.get('region')}" if p.get('region') else ""
+            formatted.append(f"  - {name} | Sector: {p.get('sector', 'N/A')}{region_str} | Description: {p.get('description', 'N/A')}")
     if "data_records" in records:
         formatted.append("\n📊 Historical Data Records:")
         for r in records["data_records"]:
-            formatted.append(f"  - Month: {r.get('month', 'N/A')} | Data: {json.dumps(r.get('data', {}))}")
+            month = r.get('month', 'N/A')
+            data = r.get('data', {})
+            if "unit_data" in data or "customer_data" in data:
+                from .data_pipeline import parse_legacy_record
+                normalised = parse_legacy_record(data)
+                params = normalised.get("parameters", {})
+                unit_data = normalised.get("unit_data", {})
+                customer_data = normalised.get("customer_data", [])
+                
+                unit_str = ", ".join(f"{k}: {v}" for k, v in unit_data.items())
+                cust_summaries = []
+                for c in customer_data:
+                    c_name = c.get("name", "Unknown")
+                    c_metrics = {k: v for k, v in c.items() if k != "name"}
+                    cust_summaries.append(f"{c_name}: {json.dumps(c_metrics)}")
+                
+                formatted.append(
+                    f"  - Date: {month} | Tower: {params.get('towerName', 'N/A')} | City: {params.get('city', 'N/A')} | Region: {params.get('region', 'N/A')} | "
+                    f"Unit Metrics: [{unit_str}] | Customer Data: [{', '.join(cust_summaries)}]"
+                )
+            elif "tenants" in data and isinstance(data["tenants"], list):
+                tenant_summaries = []
+                for t in data["tenants"]:
+                    t_name = t.get('name', 'Unknown')
+                    t_metrics = {**t.get('inputs', {}), **t.get('outputs', {})}
+                    tenant_summaries.append(f"{t_name}: {json.dumps(t_metrics)}")
+                formatted.append(f"  - Month: {month} | Tenants: [{', '.join(tenant_summaries)}]")
+            else:
+                formatted.append(f"  - Month: {month} | Data: {json.dumps(data)}")
     return "\n".join(formatted)
 
 
-def get_rag_chatbot_response(records: dict, query: str, history: List[dict] = None) -> dict:
+def get_rag_chatbot_response(records: dict, query: str, history: List[dict] = None, bot_type: str = "productivity") -> dict:
     """
     Uses Groq (Llama 3.3) to answer questions based on provided records and conversation history.
     """
@@ -224,12 +282,37 @@ def get_rag_chatbot_response(records: dict, query: str, history: List[dict] = No
         return {"error": "API Key is not configured."}
 
     records_context = format_records_for_ai1(records)
-    system_instruction = (
-        "You are a helpful assistant for the Productix app. "
-        "Answer questions *only* from the given data. "
-        "If info is missing, say it's not available. "
-        "Maintain a professional and helpful tone."
-    )
+    
+    # Role-oriented system instructions
+    instructions = {
+        "productivity": (
+            "You are a helpful Productivity Assistant for the Productix app. "
+            "Focus on analyzing productivity data, batch performance, and efficiency. "
+            "Answer questions *only* from the given data. If info is missing, say it's not available. "
+            "Maintain a professional and helpful tone."
+        ),
+        "energy": (
+            "You are an Energy Specialist Assistant for the Productix app. "
+            "Focus on energy consumption, electricity usage, and sustainability metrics. "
+            "Help the user understand their energy footprint and identify waste. "
+            "Answer questions *only* from the given data. If info is missing, say it's not available."
+        ),
+        "hr": (
+            "You are an HR Analytics Assistant for the Productix app. "
+            "Focus on human resources, personnel performance, shift management, and workforce efficiency. "
+            "Ensure a professional tone and maintain data privacy standards. "
+            "Answer questions *only* from the given data. If info is missing, say it's not available."
+        ),
+        "process": (
+            "You are a Process Optimization Assistant for the Productix app. "
+            "Focus on manufacturing processes, workflow bottlenecks, and operational improvements. "
+            "Help the user optimize their production stages. "
+            "Answer questions *only* from the given data. If info is missing, say it's not available."
+        )
+    }
+
+    system_instruction = instructions.get(bot_type, instructions["productivity"])
+    
     rag_context = f"Context Data (ONLY use this for factual answers):\n{records_context}"
     messages = []
     if history:
@@ -355,6 +438,75 @@ Format your response as valid JSON only.
         return {"error": "No JSON found in AI response"}
     except Exception as e:
         return {"error": str(e)}
+
+def ai_analysis_for_batch(batch: Batch, shift_entries: List[ShiftEntry]):
+    """
+    Analyzes all shift entries under a Batch.
+    Summarizes total cost, total output, and calls LLM to generate recommendations.
+    """
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return {"error": "GROQ_API_KEY is missing."}
+
+    # Aggregate inputs and outputs from all shift entries
+    total_cost = 0.0
+    total_output = 0.0
+    inputs_agg = {}
+    outputs_agg = {}
+
+    for entry in shift_entries:
+        total_cost += entry.total_cost
+        total_output += entry.output_units
+        
+        # Merge individual input details
+        for name, detail in (entry.input_materials or {}).items():
+            if isinstance(detail, dict) and "amount" in detail:
+                inputs_agg[name] = inputs_agg.get(name, 0.0) + float(detail["amount"])
+
+        # Merge individual output details
+        for name, detail in (entry.output_products or {}).items():
+            if isinstance(detail, dict) and "amount" in detail:
+                outputs_agg[name] = outputs_agg.get(name, 0.0) + float(detail["amount"])
+
+    # Calculate overall productivity
+    productivity_ratio = (total_output / total_cost) if total_cost > 0 else 0.0
+
+    prompt = f"""
+You are a senior business analyst. Analyze this manufacturing batch:
+Batch Number: {batch.batch_number}
+Status: {batch.status.value if hasattr(batch.status, 'value') else batch.status}
+Start Date: {batch.start_date}
+End Date: {batch.end_date}
+
+Aggregated Inputs: {json.dumps(inputs_agg)}
+Aggregated Outputs: {json.dumps(outputs_agg)}
+Total Cost: {total_cost}
+Total Output: {total_output}
+Productivity Ratio (Output / Cost): {productivity_ratio:.4f}
+
+Please provide a JSON analysis with:
+1. predicted_output_next_period: (number) 
+2. top_3_inefficiencies: (array of {{source, explanation}}) 
+3. top_inefficiency_scores: (array of numbers 0-100)
+4. ai_recommendations: (array of 3 strings)
+
+Format your response as valid JSON only.
+"""
+
+    client = Groq(api_key=api_key)
+    try:
+        response_text = _generate_with_retry(
+            client=client,
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        match = re.search(r'\{.*\}', response_text.strip(), re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return {"error": "No JSON found in AI response"}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 def rag_chat_response(db: Session, organization_id: int, query: str):
     """

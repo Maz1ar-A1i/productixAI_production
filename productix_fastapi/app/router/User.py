@@ -35,6 +35,12 @@ def create_user(
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
 
+    if user_in.role == models.UserRole.system_admin:
+        raise HTTPException(
+            status_code=400,
+            detail="Creating system admin accounts via this API is not allowed."
+        )
+
     hashed = auth.hash_password(user_in.password)
     user = models.User(
         name=user_in.name,
@@ -91,3 +97,91 @@ def delete_user(
     db.delete(user)
     db.commit()
     return {"detail": "User deleted successfully"}
+
+
+# -------------------------------
+# List units assigned to a user
+# -------------------------------
+@router.get("/{user_id}/assigned-units", response_model=List[schemas.ProductResponse])
+def list_assigned_units(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(deps.require_role("org_admin"))
+):
+    # Verify user belongs to org
+    user = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.organization_id == current_user.organization_id
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get assigned products
+    assignments = db.query(models.UserProductAssignment).filter(
+        models.UserProductAssignment.user_id == user_id
+    ).all()
+    
+    product_ids = [a.product_id for a in assignments]
+    
+    products = db.query(models.Product).filter(
+        models.Product.id.in_(product_ids)
+    ).all() if product_ids else []
+
+    # Map/parse JSON fields for safety
+    import json
+    for p in products:
+        if isinstance(p.input_fields, str) and p.input_fields:
+            p.input_fields = json.loads(p.input_fields.replace("'", '"'))
+        if isinstance(p.output_fields, str) and p.output_fields:
+            p.output_fields = json.loads(p.output_fields.replace("'", '"'))
+
+    return products
+
+
+# -------------------------------
+# Assign units to a user
+# -------------------------------
+from pydantic import BaseModel
+
+class AssignUnitsPayload(BaseModel):
+    product_ids: List[int]
+
+@router.post("/{user_id}/assign-units")
+def assign_units(
+    user_id: int,
+    payload: AssignUnitsPayload,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(deps.require_role("org_admin"))
+):
+    # Verify user belongs to org
+    user = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.organization_id == current_user.organization_id
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Verify all product_ids belong to org
+    for pid in payload.product_ids:
+        product = db.query(models.Product).filter(
+            models.Product.id == pid,
+            models.Product.organization_id == current_user.organization_id
+        ).first()
+        if not product:
+            raise HTTPException(status_code=400, detail=f"Unit with ID {pid} not found in your organization")
+
+    # Delete existing assignments
+    db.query(models.UserProductAssignment).filter(
+        models.UserProductAssignment.user_id == user_id
+    ).delete()
+
+    # Add new assignments
+    for pid in payload.product_ids:
+        assignment = models.UserProductAssignment(
+            user_id=user_id,
+            product_id=pid
+        )
+        db.add(assignment)
+
+    db.commit()
+    return {"detail": "Units assigned successfully"}

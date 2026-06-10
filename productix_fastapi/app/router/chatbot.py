@@ -1,7 +1,7 @@
 import re
 import json
 from typing import Optional, Dict, Any, List
-from datetime import date
+from datetime import date, datetime
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException
 from ..database import get_db
@@ -42,14 +42,18 @@ def detect_intent(query: str) -> Dict[str, Any]:
 
     return {"entity_type": "unknown", "identifier": None}
 
-def answer_product(db, org_id: int, identifier: Optional[str]) -> Optional[str]:
+def answer_product(db, org_id: int, identifier: Optional[str], current_user: models.User) -> Optional[str]:
+    query_prod = db.query(models.Product).filter(models.Product.organization_id == org_id)
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()]
+        query_prod = query_prod.filter(models.Product.id.in_(assigned_ids))
+
     if identifier:
-        products = db.query(models.Product).filter(
-            models.Product.organization_id == org_id,
-            models.Product.name.ilike(f"%{identifier}%")
-        ).all()
+        products = query_prod.filter(models.Product.name.ilike(f"%{identifier}%")).all()
     else:
-        products = db.query(models.Product).filter(models.Product.organization_id == org_id).all()
+        products = query_prod.all()
 
     if not products: return None
     lines = ["🧩 Products:"]
@@ -57,25 +61,37 @@ def answer_product(db, org_id: int, identifier: Optional[str]) -> Optional[str]:
         lines.append(f"- {p.name} | Sector: {p.sector or 'N/A'} | Description: {p.description or 'N/A'}")
     return "\n".join(lines)
 
-def answer_record(db, org_id: int) -> Optional[str]:
-    records = (
-        db.query(models.ProductDataRecord)
-        .filter(models.ProductDataRecord.organization_id == org_id)
-        .order_by(models.ProductDataRecord.created_at.desc())
-        .limit(10)
-        .all()
-    )
+def answer_record(db, org_id: int, current_user: models.User) -> Optional[str]:
+    query_rec = db.query(models.ProductDataRecord).filter(models.ProductDataRecord.organization_id == org_id)
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()]
+        query_rec = query_rec.filter(models.ProductDataRecord.product_id.in_(assigned_ids))
+
+    records = query_rec.order_by(models.ProductDataRecord.created_at.desc()).limit(10).all()
     if not records: return None
     lines = ["📊 Recent Data Records:"]
     for r in records:
         product_name = r.product.name if r.product else r.product_id
-        lines.append(f"- {r.month} | Product: {product_name} | Data: {json.dumps(r.data)}")
+        data = r.data or {}
+        if "tenants" in data and isinstance(data["tenants"], list):
+            t_names = [t.get("name", "N/A") for t in data["tenants"]]
+            lines.append(f"- {r.month} | Tower: {product_name} | Tenants: {', '.join(t_names)}")
+        else:
+            lines.append(f"- {r.month} | Tower: {product_name} | Data: {json.dumps(data)}")
     return "\n".join(lines)
 
-def run_analytics(db, org_id: int, query: str) -> Optional[str]:
+def run_analytics(db, org_id: int, query: str, current_user: models.User) -> Optional[str]:
     q = query.lower()
     if any(tok in q for tok in ["highest output", "max output", "which product had highest"]):
-        records = db.query(models.ProductDataRecord).filter(models.ProductDataRecord.organization_id == org_id).all()
+        query_rec = db.query(models.ProductDataRecord).filter(models.ProductDataRecord.organization_id == org_id)
+        if current_user.role.value == "org_user":
+            assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+                models.UserProductAssignment.user_id == current_user.id
+            ).all()]
+            query_rec = query_rec.filter(models.ProductDataRecord.product_id.in_(assigned_ids))
+        records = query_rec.all()
         prod_sums = {}
         for r in records:
             p_name = r.product.name if r.product else str(r.product_id)
@@ -92,7 +108,7 @@ def run_analytics(db, org_id: int, query: str) -> Optional[str]:
                 else:
                     for k, v in r.data.items():
                         try:
-                            if any(kw in k.lower() for kw in ["revenue", "sales", "traffic", "capacity", "units", "produced"]):
+                            if any(kw in k.lower() for kw in ["revenue", "sales", "traffic", "capacity", "units", "produced", "sold", "kw", "kilowatt"]):
                                 total += float(v)
                                 found = True
                         except: continue
@@ -129,6 +145,8 @@ def serialize_model(obj):
 def chatbot_query(payload: Dict[str, Any], db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     query = payload.get("query")
     history = payload.get("history", [])
+    bot_type = payload.get("bot_type", "productivity")
+    product_id = payload.get("product_id")
     
     if not query:
         raise HTTPException(status_code=400, detail="Query is required.")
@@ -136,16 +154,36 @@ def chatbot_query(payload: Dict[str, Any], db: Session = Depends(get_db), curren
     org_id = current_user.organization_id
 
     try:
+        # Get active filters from payload
+        active_filters = payload.get("filters", {})
+        if not active_filters and product_id:
+            # Fallback for old parameter
+            active_filters = {"tower_id": product_id}
+
+        # If user is org_user, verify filter matches assignment
+        assigned_ids = None
+        if current_user.role.value == "org_user":
+            assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+                models.UserProductAssignment.user_id == current_user.id
+            ).all()]
+            if active_filters.get("tower_id") and str(active_filters["tower_id"]).lower() != "all":
+                try:
+                    tid = int(active_filters["tower_id"])
+                    if tid not in assigned_ids:
+                        raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+                except (ValueError, TypeError):
+                    pass
+
         # 1) Direct DB Intent Handling (only for simple queries without history)
         intent = detect_intent(query)
         db_answer = None
-        if not history:
+        if not history and not active_filters:  # only do simple db intent answer if no filters are active to avoid leaking out-of-scope data
             if intent["entity_type"] == "product":
-                db_answer = answer_product(db, org_id, intent.get("identifier"))
+                db_answer = answer_product(db, org_id, intent.get("identifier"), current_user)
             elif intent["entity_type"] == "record":
-                db_answer = answer_record(db, org_id)
+                db_answer = answer_record(db, org_id, current_user)
             elif intent["entity_type"] == "analytics":
-                db_answer = run_analytics(db, org_id, query)
+                db_answer = run_analytics(db, org_id, query, current_user)
 
         if db_answer:
             history_record = models.ChatbotHistory(
@@ -156,17 +194,49 @@ def chatbot_query(payload: Dict[str, Any], db: Session = Depends(get_db), curren
             db.commit()
             return {"query": query, "response": db_answer}
 
-        # 2) RAG Fallback with History
-        products = db.query(models.Product).filter(models.Product.organization_id == org_id).limit(10).all()
-        records = db.query(models.ProductDataRecord).filter(models.ProductDataRecord.organization_id == org_id).order_by(models.ProductDataRecord.created_at.desc()).limit(15).all()
+        # 2) RAG Fallback with History and Filters
+        records_query = db.query(models.ProductDataRecord).filter(
+            models.ProductDataRecord.organization_id == org_id
+        )
+        products_query = db.query(models.Product).filter(
+            models.Product.organization_id == org_id
+        )
+        
+        if assigned_ids is not None:
+            records_query = records_query.filter(models.ProductDataRecord.product_id.in_(assigned_ids))
+            products_query = products_query.filter(models.Product.id.in_(assigned_ids))
+
+        all_records = records_query.all()
+        all_products = products_query.all()
+
+        # Apply filters using apply_filters helper
+        from ..data_pipeline import apply_filters
+        filtered_records = apply_filters(all_records, active_filters)
+
+        # Filter products to match remaining records, or directly filter if a tower filter is applied
+        filtered_pids = {r.product_id for r in filtered_records}
+        filtered_products = [p for p in all_products if p.id in filtered_pids]
+
+        if active_filters.get("tower_id") and str(active_filters["tower_id"]).lower() != "all":
+            try:
+                tid = int(active_filters["tower_id"])
+                filtered_products = [p for p in all_products if p.id == tid]
+            except (ValueError, TypeError):
+                # Try matching by name
+                target_name = str(active_filters["tower_id"]).lower()
+                filtered_products = [p for p in all_products if target_name in p.name.lower()]
+                
+        # Limit the lists for safety context sizes
+        filtered_products = filtered_products[:15]
+        filtered_records = filtered_records[:30]
 
         context_data = {
-            "products": [serialize_model(p) for p in products],
-            "data_records": [serialize_model(r) for r in records],
+            "products": [serialize_model(p) for p in filtered_products],
+            "data_records": [serialize_model(r) for r in filtered_records],
         }
 
-        # Call RAG logic with history
-        rag_result = core_rag_response(context_data, query, history=history)
+        # Call RAG logic with history and bot type
+        rag_result = core_rag_response(context_data, query, history=history, bot_type=bot_type)
         
         if "error" in rag_result:
              return {"query": query, "response": f"AI Error: {rag_result['error']}"}

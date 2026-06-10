@@ -299,14 +299,14 @@ export default function TelcoPlugin() {
         // Fetch products from Backend
         const prodRes = await api.get('/products/');
         
-        // Fetch towers from LocalStorage
-        const lsTowers = JSON.parse(localStorage.getItem("telco_towers_v1") || "[]").map(t => ({
+        // Fetch units from LocalStorage
+        const lsUnits = JSON.parse(localStorage.getItem("telco_units_v1") || "[]").map(t => ({
           id: `ls_${t.id}`,
           name: `${t.name} (Local)`,
           isLocal: true
         }));
 
-        setProducts([...prodRes.data, ...lsTowers]);
+        setProducts([...prodRes.data, ...lsUnits]);
 
         // Fetch Analytics from Backend
         let combined = [];
@@ -320,18 +320,18 @@ export default function TelcoPlugin() {
         } catch (err) { console.error("Backend fetch failed", err); }
 
         // Merge with LocalStorage data
-        const allLSData = JSON.parse(localStorage.getItem("telco_tower_data_v2") || "{}");
-        Object.entries(allLSData).forEach(([towerId, towerData]) => {
-          const fullId = `ls_${towerId}`;
+        const allLSData = JSON.parse(localStorage.getItem("telco_unit_data_v2") || "{}");
+        Object.entries(allLSData).forEach(([unitId, unitData]) => {
+          const fullId = `ls_${unitId}`;
           if (filters.productId && filters.productId !== fullId) return;
           
-          const rows = towerData.towerRows || [];
+          const rows = unitData.unitRows || [];
           rows.forEach(row => {
             if (!row.Date) return;
             let inputs = {}, outputs = {}, tin = 0, tout = 0;
 
             Object.entries(row).forEach(([k, v]) => {
-              if (k.startsWith('tower_')) {
+              if (k.startsWith('unit_')) {
                 const val = Number(v) || 0;
                 // Heuristic for productivity/efficiency
                 const isOut = k.toLowerCase().includes('hr') || k.toLowerCase().includes('efficiency') || k.toLowerCase().includes('productivity');

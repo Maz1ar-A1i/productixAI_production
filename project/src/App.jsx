@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect, createContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { authService } from './services/api';
+import api, { authService } from './services/api';
 
 // Layout
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/layout';
+import { AlertManager } from './components/AlertNotification';
 
 // Auth Pages
 import Landing from './pages/Landing';
@@ -19,7 +20,7 @@ import OrgDashboard from './pages/org_admin';
 // ── Formula Builder Module
 import FormulaBuilder from './pages/FormulaBuilder';
 import FormulaLibrary from './pages/FormulaLibrary';
-import TowerManager from './pages/TowerManager';
+import UnitManager from './pages/UnitManager';
 
 // ── Co-Pilot Pages
 import HomeFeed from './pages/copilot/HomeFeed';
@@ -44,8 +45,11 @@ import Agent from './pages/Agent';
 import Reports from './pages/productivity/Reports';
 import AIAnalysis from './pages/productivity/AIAnalysis';
 import RAGChat from './pages/productivity/RAGChat';
-import ExcelUpload from "./pages/productivity/upload";
-import TowerDataEntry from "./pages/TowerDataEntry";
+import KPIDashboard from './pages/KPIDashboard';
+
+import UnitDataEntry from "./pages/UnitDataEntry";
+
+export const LicenseContext = createContext(null);
 
 // Public route guard (redirect if already logged in)
 const PublicRoute = ({ children }) => {
@@ -61,79 +65,139 @@ const LayoutRoute = ({ element, roles }) => (
 );
 
 function App() {
-  return (
-    <Router>
-      <div className="page-wrapper">
-        <Routes>
-          {/* ── Public Routes ── */}
-          <Route path="/" element={<PublicRoute><Landing /></PublicRoute>} />
-          <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-          <Route path="/signup" element={<PublicRoute><Signup /></PublicRoute>} />
-          <Route path="/verify-result" element={<Verify_Result />} />
+  const [licenseStatus, setLicenseStatus] = useState(null);
+  const [checking, setChecking] = useState(true);
 
-          {/* ── Co-Pilot Routes (PRIMARY) ── */}
-          <Route path="/feed" element={<LayoutRoute element={<HomeFeed />} />} />
-          <Route path="/voice" element={<LayoutRoute element={<VoiceInterface />} />} />
-          <Route path="/agents" element={<LayoutRoute element={<AgentsScreen />} />} />
-          <Route path="/goals" element={<LayoutRoute element={<GoalSetting />} />} />
-          <Route path="/auto-mode" element={<LayoutRoute element={<AutoModeControl />} />} />
+  const fetchLicenseStatus = async () => {
+    try {
+      const res = await api.get("/api/license/local-status");
+      setLicenseStatus(res.data);
+    } catch (err) {
+      console.error("Failed to fetch license status:", err);
+      setLicenseStatus({ valid: false, reason: "CONNECTION_ERROR", licenseKey: "", machineId: "Offline" });
+    } finally {
+      setChecking(false);
+    }
+  };
 
-          {/* ── Sector Plugin Routes ── */}
-          <Route path="/plugins/telco" element={<LayoutRoute element={<TelcoPlugin />} />} />
-          <Route path="/plugins/energy" element={<LayoutRoute element={<EnergyPlugin />} />} />
-          <Route path="/plugins/revenue" element={<LayoutRoute element={<RevenuePlugin />} />} />
-          <Route path="/plugins/retail" element={<LayoutRoute element={<RetailPlugin />} />} />
-          <Route path="/plugins/textile" element={<LayoutRoute element={<TextilePlugin />} />} />
+  useEffect(() => {
+    fetchLicenseStatus();
+    window.refreshLicenseStatus = fetchLicenseStatus;
 
-          {/* ── Legacy Productivity Routes ── */}
-          <Route path="/dashboard" element={<LayoutRoute element={<Dashboard />} />} />
-          <Route path="/calculate" element={<LayoutRoute element={<Calculate />} />} />
-          <Route path="/analyze" element={<LayoutRoute element={<Analyze />} />} />
-          <Route path="/chatbot" element={<LayoutRoute element={<Chatbot />} />} />
-          <Route path="/agent" element={<LayoutRoute element={<Agent />} />} />
-          <Route path="/productivity/reports" element={<LayoutRoute element={<Reports />} />} />
-          <Route path="/productivity/ai" element={<LayoutRoute element={<AIAnalysis />} />} />
-          <Route path="/productivity/rag-chat" element={<LayoutRoute element={<RAGChat />} />} />
-          <Route path="/productivity/excel-upload" element={<LayoutRoute element={<ExcelUpload />} />} />
-          <Route path="/tower-data" element={
-            <ProtectedRoute allowedRoles={['org_user']}>
-              <Layout><TowerDataEntry /></Layout>
-            </ProtectedRoute>
-          } />
-          {/* ── Formula Builder Routes (org_admin only) ── */}
-          <Route path="/tower-manager" element={
-            <ProtectedRoute allowedRoles={['org_admin']}>
-              <Layout><TowerManager /></Layout>
-            </ProtectedRoute>
-          } />
-          <Route path="/formula-builder" element={
-            <ProtectedRoute allowedRoles={['org_admin']}>
-              <Layout><FormulaBuilder /></Layout>
-            </ProtectedRoute>
-          } />
-          <Route path="/formula-library" element={
-            <ProtectedRoute allowedRoles={['org_admin']}>
-              <Layout><FormulaLibrary /></Layout>
-            </ProtectedRoute>
-          } />
+    // Poll local status every 2 minutes
+    const interval = setInterval(fetchLicenseStatus, 120000);
 
-          {/* ── Admin Routes ── */}
-          <Route path="/org_admin" element={
-            <ProtectedRoute allowedRoles={['org_admin']}>
-              <Layout><OrgDashboard /></Layout>
-            </ProtectedRoute>
-          } />
-          <Route path="/system_admin" element={
-            <ProtectedRoute>
-              <SuperAdmin />
-            </ProtectedRoute>
-          } />
+    // Listen for global license block events
+    const handleLicenseRequired = (e) => {
+      setLicenseStatus({
+        valid: false,
+        reason: e.detail?.reason || "REVOKED",
+        licenseKey: e.detail?.licenseKey || "",
+        expiresAt: e.detail?.expiresAt || null,
+        hoursLeft: e.detail?.hoursLeft || 0.0,
+        machineId: e.detail?.machineId || ""
+      });
+    };
 
-          {/* ── Catch All ── */}
-          <Route path="*" element={<Navigate to="/feed" replace />} />
-        </Routes>
+    window.addEventListener("license-required", handleLicenseRequired);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("license-required", handleLicenseRequired);
+      delete window.refreshLicenseStatus;
+    };
+  }, []);
+
+  if (checking) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-[#09090b]">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-t-teal-500 border-white/10 rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-zinc-500 text-sm font-semibold tracking-wider uppercase">Initializing Workspace...</p>
+        </div>
       </div>
-    </Router>
+    );
+  }
+
+  return (
+    <LicenseContext.Provider value={{ licenseStatus, refreshLicense: fetchLicenseStatus }}>
+      <Router>
+        <div className="page-wrapper">
+          {/* Only show AlertManager when authenticated */}
+          {localStorage.getItem('token') && <AlertManager />}
+          <Routes>
+            {/* ── Public Routes ── */}
+            <Route path="/" element={<PublicRoute><Landing /></PublicRoute>} />
+            <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+            <Route path="/signup" element={<PublicRoute><Signup /></PublicRoute>} />
+            <Route path="/verify-result" element={<Verify_Result />} />
+
+            {/* ── Co-Pilot Routes (PRIMARY) ── */}
+            <Route path="/feed" element={<LayoutRoute element={<HomeFeed />} />} />
+            <Route path="/voice" element={<LayoutRoute element={<VoiceInterface />} />} />
+            <Route path="/agents" element={<LayoutRoute element={<AgentsScreen />} />} />
+            <Route path="/goals" element={<LayoutRoute element={<GoalSetting />} />} />
+            <Route path="/auto-mode" element={<LayoutRoute element={<AutoModeControl />} />} />
+
+            {/* ── Sector Plugin Routes ── */}
+            <Route path="/plugins/telco" element={<LayoutRoute element={<TelcoPlugin />} />} />
+            <Route path="/plugins/energy" element={<LayoutRoute element={<EnergyPlugin />} />} />
+            <Route path="/plugins/revenue" element={<LayoutRoute element={<RevenuePlugin />} />} />
+            <Route path="/plugins/retail" element={<LayoutRoute element={<RetailPlugin />} />} />
+            <Route path="/plugins/textile" element={<LayoutRoute element={<TextilePlugin />} />} />
+
+            {/* ── Legacy Productivity Routes ── */}
+            <Route path="/dashboard" element={<LayoutRoute element={<Dashboard />} />} />
+            <Route path="/calculate" element={<LayoutRoute element={<Calculate />} />} />
+            <Route path="/analyze" element={<LayoutRoute element={<Analyze />} />} />
+            <Route path="/chatbot" element={<LayoutRoute element={<Chatbot />} />} />
+            <Route path="/chatbot/:botType" element={<LayoutRoute element={<Chatbot />} />} />
+            <Route path="/agent" element={<LayoutRoute element={<Agent />} />} />
+            <Route path="/productivity/reports" element={<LayoutRoute element={<Reports />} />} />
+            <Route path="/productivity/ai" element={<LayoutRoute element={<AIAnalysis />} />} />
+            <Route path="/productivity/rag-chat" element={<LayoutRoute element={<RAGChat />} />} />
+            <Route path="/kpi" element={<LayoutRoute element={<KPIDashboard />} />} />
+
+            <Route path="/unit-data" element={
+              <ProtectedRoute allowedRoles={['org_user', 'org_admin']}>
+                <Layout><UnitDataEntry /></Layout>
+              </ProtectedRoute>
+            } />
+            {/* ── Formula Builder Routes (org_admin only) ── */}
+            <Route path="/unit-manager" element={
+              <ProtectedRoute allowedRoles={['org_admin']}>
+                <Layout><UnitManager /></Layout>
+              </ProtectedRoute>
+            } />
+            <Route path="/formula-builder" element={
+              <ProtectedRoute allowedRoles={['org_admin']}>
+                <Layout><FormulaBuilder /></Layout>
+              </ProtectedRoute>
+            } />
+            <Route path="/formula-library" element={
+              <ProtectedRoute allowedRoles={['org_admin']}>
+                <Layout><FormulaLibrary /></Layout>
+              </ProtectedRoute>
+            } />
+
+            {/* ── Admin Routes ── */}
+            <Route path="/org_admin" element={
+              <ProtectedRoute allowedRoles={['org_admin']}>
+                <Layout><OrgDashboard /></Layout>
+              </ProtectedRoute>
+            } />
+            <Route path="/system_admin" element={
+              <ProtectedRoute>
+                <SuperAdmin />
+              </ProtectedRoute>
+            } />
+
+            {/* ── Catch All ── */}
+            <Route path="*" element={<Navigate to="/feed" replace />} />
+          </Routes>
+        </div>
+      </Router>
+    </LicenseContext.Provider>
   );
 }
 

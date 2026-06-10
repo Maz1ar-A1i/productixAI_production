@@ -1,16 +1,18 @@
 # app/routers/system_admin.py
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List
 from ..database import get_db
-from ..models import Organization, Subscription, User
+from ..models import Organization, Subscription, User, UserRole
 from ..schemas import (
     OrganizationResponse,
     OrganizationBase,
     UserResponse,
-    UserCreate
+    UserCreate,
+    SubscriptionTimerUpdate
 )
 from ..deps import require_system_admin
 from ..auth import hash_password
@@ -22,7 +24,22 @@ router = APIRouter(prefix="/system-admin", tags=["System Admin"])
 # ------------------------------------------------
 @router.get("/organizations", response_model=List[OrganizationResponse])
 def list_organizations(db: Session = Depends(get_db), admin=Depends(require_system_admin)):
-    return db.query(Organization).all()
+    orgs = db.query(Organization).all()
+    now = datetime.utcnow()
+    updated = False
+    
+    for org in orgs:
+        if org.status == "active" and org.subscription and org.subscription.end_date:
+            if org.subscription.end_date < now:
+                org.status = "disabled"
+                updated = True
+    
+    if updated:
+        db.commit()
+        # Refresh orgs to get updated status
+        orgs = db.query(Organization).all()
+        
+    return orgs
 
 
 @router.post("/organizations", response_model=OrganizationResponse)
@@ -93,6 +110,9 @@ def create_org_user(
     org = db.query(Organization).filter(Organization.id == org_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
+
+    if user_in.role == UserRole.system_admin:
+        raise HTTPException(status_code=400, detail="Cannot create multiple global admin accounts.")
 
     existing_user = db.query(User).filter(User.email == user_in.email).first()
     if existing_user:
@@ -205,6 +225,38 @@ def toggle_organization_status(
     return org
 
 
+@router.put("/organizations/{org_id}/subscription-timer", response_model=OrganizationResponse)
+def set_subscription_timer(
+    org_id: int,
+    timer_in: SubscriptionTimerUpdate,
+    db: Session = Depends(get_db),
+    admin=Depends(require_system_admin)
+):
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    now = datetime.utcnow()
+    end_date = now + timedelta(days=timer_in.days)
+
+    if not org.subscription:
+        org.subscription = Subscription(
+            organization_id=org.id,
+            plan_name=org.subscription_plan or "pro",
+            status="active",
+            start_date=now,
+            end_date=end_date
+        )
+    else:
+        org.subscription.status = "active"
+        org.subscription.end_date = end_date
+
+    org.status = "active"
+    db.commit()
+    db.refresh(org)
+    return org
+
+
 @router.put("/users/{user_id}/toggle-status", response_model=UserResponse)
 def toggle_user_status(
     user_id: int, 
@@ -219,4 +271,176 @@ def toggle_user_status(
     db.commit()
     db.refresh(user)
     return user
+
+
+# ------------------------------------------------
+# License Management
+# ------------------------------------------------
+import uuid
+
+@router.get("/licenses")
+def list_licenses(db: Session = Depends(get_db), admin=Depends(require_system_admin)):
+    """List all licenses in the central registry, with their associated organization name."""
+    from ..models import License, Organization
+    licenses = db.query(License).filter(License.role != "global_admin").all()
+    res = []
+    for lic in licenses:
+        org_name = "Global Registry"
+        if lic.organization_id:
+            org = db.query(Organization).filter(Organization.id == lic.organization_id).first()
+            if org:
+                org_name = org.name
+        
+        res.append({
+            "id": lic.id,
+            "license_key": lic.license_key,
+            "role": lic.role,
+            "status": lic.status,
+            "expires_at": lic.expires_at.isoformat() if lic.expires_at else None,
+            "created_at": lic.created_at.isoformat() if lic.created_at else None,
+            "organization_id": lic.organization_id,
+            "organization_name": org_name
+        })
+    return res
+
+class CreateLicenseSchema(BaseModel):
+    organization_id: int
+    duration_days: int
+
+@router.post("/licenses")
+def create_license(
+    lic_in: CreateLicenseSchema,
+    db: Session = Depends(get_db),
+    admin=Depends(require_system_admin)
+):
+    """Generate and issue a new cryptographic license key for an organization."""
+    from ..models import License, Organization
+    org = db.query(Organization).filter(Organization.id == lic_in.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    # Generate a beautiful license key format: PX-XXXX-XXXX-XXXX
+    raw_uuid = str(uuid.uuid4()).upper().replace("-", "")
+    key_formatted = f"PX-{raw_uuid[0:4]}-{raw_uuid[4:8]}-{raw_uuid[8:12]}-{raw_uuid[12:16]}"
+
+    expires_at = datetime.utcnow() + timedelta(days=lic_in.duration_days)
+
+    new_license = License(
+        license_key=key_formatted,
+        role="org_admin",
+        status="active",
+        expires_at=expires_at,
+        organization_id=lic_in.organization_id
+    )
+
+    db.add(new_license)
+    db.commit()
+    db.refresh(new_license)
+
+    return {
+        "id": new_license.id,
+        "license_key": new_license.license_key,
+        "role": new_license.role,
+        "status": new_license.status,
+        "expires_at": new_license.expires_at.isoformat(),
+        "organization_id": new_license.organization_id,
+        "organization_name": org.name
+    }
+
+@router.put("/licenses/{license_id}/revoke")
+def revoke_license(
+    license_id: int,
+    db: Session = Depends(get_db),
+    admin=Depends(require_system_admin)
+):
+    """Instantly revoke an active organization license."""
+    from ..models import License
+    lic = db.query(License).filter(License.id == license_id).first()
+    if not lic:
+        raise HTTPException(status_code=404, detail="License not found")
+
+    if lic.role == "global_admin":
+        raise HTTPException(status_code=400, detail="Global master license cannot be modified via this API.")
+
+    lic.status = "revoked"
+    db.commit()
+    db.refresh(lic)
+    return {"status": "success", "message": f"License {lic.license_key} revoked."}
+
+class ExtendLicenseSchema(BaseModel):
+    days: int
+
+@router.put("/licenses/{license_id}/extend")
+def extend_license(
+    license_id: int,
+    extend_in: ExtendLicenseSchema,
+    db: Session = Depends(get_db),
+    admin=Depends(require_system_admin)
+):
+    """Extend the expiration date of an existing license by N days."""
+    from ..models import License
+    lic = db.query(License).filter(License.id == license_id).first()
+    if not lic:
+        raise HTTPException(status_code=404, detail="License not found")
+
+    if lic.role == "global_admin":
+        raise HTTPException(status_code=400, detail="Global master license cannot be modified via this API.")
+
+    if not lic.expires_at:
+        raise HTTPException(status_code=400, detail="Cannot extend an open-ended license.")
+
+    # Extend from current expiry if it is in the future, else extend from now
+    current_expiry = lic.expires_at if lic.expires_at > datetime.utcnow() else datetime.utcnow()
+    lic.expires_at = current_expiry + timedelta(days=extend_in.days)
+    lic.status = "active"  # Re-enable if it was expired
+    db.commit()
+    db.refresh(lic)
+    
+    return {
+        "status": "success",
+        "message": f"License extended by {extend_in.days} days.",
+        "expires_at": lic.expires_at.isoformat()
+    }
+
+@router.put("/licenses/{license_id}/reactivate")
+def reactivate_license(
+    license_id: int,
+    db: Session = Depends(get_db),
+    admin=Depends(require_system_admin)
+):
+    """Instantly reactivate a revoked organization license."""
+    from ..models import License
+    lic = db.query(License).filter(License.id == license_id).first()
+    if not lic:
+        raise HTTPException(status_code=404, detail="License not found")
+
+    if lic.role == "global_admin":
+        raise HTTPException(status_code=400, detail="Global master license cannot be modified via this API.")
+
+    lic.status = "active"
+    db.commit()
+    db.refresh(lic)
+    return {"status": "success", "message": f"License {lic.license_key} reactivated."}
+
+
+@router.delete("/licenses/{license_id}")
+def delete_license(
+    license_id: int,
+    db: Session = Depends(get_db),
+    admin=Depends(require_system_admin)
+):
+    """Permanently delete a license key from the central registry."""
+    from ..models import License
+    lic = db.query(License).filter(License.id == license_id).first()
+    if not lic:
+        raise HTTPException(status_code=404, detail="License not found")
+
+    if lic.role == "global_admin":
+        raise HTTPException(status_code=400, detail="Global master license cannot be deleted.")
+
+    db.delete(lic)
+    db.commit()
+    return {"status": "success", "message": "License deleted successfully."}
+
+
 

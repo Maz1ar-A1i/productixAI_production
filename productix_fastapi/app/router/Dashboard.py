@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import date
 from ..database import get_db
-from ..models import Product, ProductDataRecord
+from ..models import Product, ProductDataRecord, UserProductAssignment
 from ..deps import get_current_user
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -14,11 +14,21 @@ def dashboard_summary(db: Session = Depends(get_db), tenant=Depends(get_current_
     org_id = tenant.organization_id
 
     # --- Basic counts ---
-    total_products = db.query(Product).filter(Product.organization_id == org_id).count()
-    
-    # We replace 'running batches' with something meaningful for the new flat model, like 'Active Towers this Month'.
-    # We can just count total records for a high-level view or distinct products having records.
-    records = db.query(ProductDataRecord).filter(ProductDataRecord.organization_id == org_id).all()
+    if tenant.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(UserProductAssignment).filter(
+            UserProductAssignment.user_id == tenant.id
+        ).all()]
+        total_products = db.query(Product).filter(
+            Product.organization_id == org_id,
+            Product.id.in_(assigned_ids)
+        ).count()
+        records = db.query(ProductDataRecord).filter(
+            ProductDataRecord.organization_id == org_id,
+            ProductDataRecord.product_id.in_(assigned_ids)
+        ).all()
+    else:
+        total_products = db.query(Product).filter(Product.organization_id == org_id).count()
+        records = db.query(ProductDataRecord).filter(ProductDataRecord.organization_id == org_id).all()
     
     # Find unique products with data over all time (approximating 'active products')
     active_towers = len(set([r.product_id for r in records]))

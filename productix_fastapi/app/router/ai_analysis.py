@@ -45,6 +45,14 @@ def analyze_record(
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
 
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == record.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit's analysis.")
+
     result = ai_analysis_for_record(record)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])

@@ -8,8 +8,17 @@ import os
 
 from .. import models, schemas, deps
 from ..database import get_db
+from ..validation_service import ValidationService
 
 router = APIRouter(prefix="/data-records", tags=["Data Records"])
+
+
+def _require_not_org_admin(current_user: models.User):
+    if current_user.role.value == "org_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Organization admins have read-only monitoring access and cannot modify data records."
+        )
 
 
 # ------------------------------------------------
@@ -18,6 +27,9 @@ router = APIRouter(prefix="/data-records", tags=["Data Records"])
 @router.get("/", response_model=List[schemas.ProductDataRecordResponse])
 def list_records(
     product_id: Optional[int] = None,
+    date_start: Optional[str] = None,
+    date_end: Optional[str] = None,
+    region: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(deps.get_current_user)
 ):
@@ -26,7 +38,132 @@ def list_records(
     )
     if product_id is not None:
         query = query.filter(models.ProductDataRecord.product_id == product_id)
-    return query.order_by(models.ProductDataRecord.id.asc()).all()
+
+    if current_user.role.value == "org_user":
+        assigned_ids = [a.product_id for a in db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id
+        ).all()]
+        if product_id is not None:
+            if product_id not in assigned_ids:
+                raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+        else:
+            query = query.filter(models.ProductDataRecord.product_id.in_(assigned_ids))
+
+    records = query.order_by(models.ProductDataRecord.month.desc()).all()
+
+    # Use apply_filters to filter on dates and regions
+    from ..data_pipeline import apply_filters
+    filters = {
+        "tower_id": product_id,
+        "date_start": date_start,
+        "date_end": date_end,
+        "region": region
+    }
+    return apply_filters(records, filters)
+
+
+@router.post("/bulk")
+def save_bulk_records(
+    payload: schemas.BulkDataRecordCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(deps.get_current_user)
+):
+    _require_not_org_admin(current_user)
+    product = None
+    try:
+        product_id = int(payload.tower_id)
+        product = db.query(models.Product).filter(
+            models.Product.id == product_id,
+            models.Product.organization_id == current_user.organization_id
+        ).first()
+    except (ValueError, TypeError):
+        pass
+
+    if not product:
+        # Fallback to name search
+        product = db.query(models.Product).filter(
+            models.Product.name == payload.tower_name,
+            models.Product.organization_id == current_user.organization_id
+        ).first()
+
+    if not product:
+        # Create product if it doesn't exist
+        product = models.Product(
+            name=payload.tower_name,
+            organization_id=current_user.organization_id,
+            description=payload.city or "",
+            region=payload.region or payload.city or "",
+            sector="Telecom",
+            input_fields=[],
+            output_fields=[]
+        )
+        db.add(product)
+        db.flush()
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == product.id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to assign data for this unit.")
+
+    from ..data_pipeline import normalize_from_manual_entry
+
+    # normalize unit_rows and customer_rows
+    normalized_records = normalize_from_manual_entry(
+        unit_rows=payload.unit_rows,
+        customer_rows=payload.customer_rows,
+        tower_name=payload.tower_name,
+        city=payload.city,
+        region=payload.region or product.region or payload.city or "",
+        col_map=payload.col_map
+    )
+
+    # Save to database
+    dirty = False
+    if payload.city and product.description != payload.city:
+        product.description = payload.city
+        dirty = True
+    if payload.region and product.region != payload.region:
+        product.region = payload.region
+        dirty = True
+    if dirty:
+        db.flush()
+
+    records_created = 0
+    records_updated = 0
+
+    for rec_data in normalized_records:
+        date_val = rec_data["parameters"]["date"]
+        
+        # Check if record exists for this Product and Date
+        existing_record = db.query(models.ProductDataRecord).filter(
+            models.ProductDataRecord.product_id == product.id,
+            models.ProductDataRecord.month == date_val,
+            models.ProductDataRecord.organization_id == current_user.organization_id
+        ).first()
+
+        if existing_record:
+            existing_record.data = rec_data
+            records_updated += 1
+        else:
+            record = models.ProductDataRecord(
+                organization_id=current_user.organization_id,
+                product_id=product.id,
+                month=date_val,
+                data=rec_data
+            )
+            db.add(record)
+            records_created += 1
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Successfully saved manual data: {records_created} created, {records_updated} updated.",
+        "records_created": records_created,
+        "records_updated": records_updated
+    }
 
 
 # ------------------------------------------------
@@ -38,6 +175,7 @@ def create_record(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(deps.get_current_user)
 ):
+    _require_not_org_admin(current_user)
     # Verify product belongs to org
     product = db.query(models.Product).filter(
         models.Product.id == record_in.product_id,
@@ -45,6 +183,30 @@ def create_record(
     ).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == record_in.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
+    # Validate the record data
+    product_fields = {
+        "input_fields": product.input_fields or [],
+        "output_fields": product.output_fields or []
+    }
+    validation_result = ValidationService.validate_data_record(record_in.dict(), product_fields)
+    
+    # Create alerts for any validation issues
+    for alert_data in validation_result.alerts:
+        alert_data.user_id = current_user.id
+        db_alert = models.Alert(
+            organization_id=current_user.organization_id,
+            **alert_data.dict()
+        )
+        db.add(db_alert)
 
     record = models.ProductDataRecord(
         organization_id=current_user.organization_id,
@@ -68,12 +230,44 @@ def update_record(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(deps.get_current_user)
 ):
+    _require_not_org_admin(current_user)
     record = db.query(models.ProductDataRecord).filter(
         models.ProductDataRecord.id == record_id,
         models.ProductDataRecord.organization_id == current_user.organization_id
     ).first()
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == record.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
+
+    # Validate the updated record data
+    product = db.query(models.Product).filter(
+        models.Product.id == record.product_id,
+        models.Product.organization_id == current_user.organization_id
+    ).first()
+    
+    if product:
+        product_fields = {
+            "input_fields": product.input_fields or [],
+            "output_fields": product.output_fields or []
+        }
+        validation_result = ValidationService.validate_data_record(record_in.dict(), product_fields)
+        
+        # Create alerts for any validation issues
+        for alert_data in validation_result.alerts:
+            alert_data.user_id = current_user.id
+            alert_data.entity_id = record_id
+            db_alert = models.Alert(
+                organization_id=current_user.organization_id,
+                **alert_data.dict()
+            )
+            db.add(db_alert)
 
     record.month = record_in.month
     record.data = record_in.data
@@ -91,12 +285,21 @@ def delete_record(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(deps.get_current_user)
 ):
+    _require_not_org_admin(current_user)
     record = db.query(models.ProductDataRecord).filter(
         models.ProductDataRecord.id == record_id,
         models.ProductDataRecord.organization_id == current_user.organization_id
     ).first()
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == record.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     db.delete(record)
     db.commit()
@@ -119,6 +322,14 @@ def get_record_report(
     ).first()
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == record.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     data = record.data or {}
     output_keywords = ["revenue", "sales", "traffic", "capacity", "units", "produced"]
@@ -203,6 +414,14 @@ def export_record_excel(
     ).first()
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
+
+    if current_user.role.value == "org_user":
+        assignment = db.query(models.UserProductAssignment).filter(
+            models.UserProductAssignment.user_id == current_user.id,
+            models.UserProductAssignment.product_id == record.product_id
+        ).first()
+        if not assignment:
+            raise HTTPException(status_code=403, detail="You do not have access to this unit.")
 
     df = pd.DataFrame([record.data or {}])
     file_path = f"record_{record_id}_export.xlsx"

@@ -1,5 +1,6 @@
 import React from 'react';
 import Sidebar from './Sidebar';
+import OfflineBanner from './OfflineBanner';
 
 const Layout = ({ children }) => {
   return (
@@ -9,10 +10,13 @@ const Layout = ({ children }) => {
 
       {/* Main content — offset by sidebar width on md+ */}
       <div
-        className="flex-1 md:ml-60"
+        className="flex-1 md:ml-60 flex flex-col"
         style={{ minHeight: '100vh', overflow: 'auto' }}
       >
-        {children}
+        <OfflineBanner />
+        <div className="flex-1">
+          {children}
+        </div>
       </div>
     </div>
   );
