@@ -109,7 +109,7 @@ const SystemAdmin = () => {
 
   const logout = () => {
     localStorage.removeItem("token");
-    window.location.href = "/login";
+    window.location.href = "/";
   };
 
   const createOrganization = async (e) => {
