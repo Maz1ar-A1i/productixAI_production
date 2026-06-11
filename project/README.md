@@ -124,6 +124,12 @@ See `INTEGRATION_CHECKLIST.md` for complete backend integration details.
 
 ## 🚀 Deployment
 
+### Deploying to Vercel
+1. Set the **Root Directory** in your Vercel Project Settings to `project`.
+2. Disable the toggle **Include files outside the root directory in the Build Step**.
+3. Set the **Framework Preset** to **Vite**.
+4. Add the environment variable `VITE_API_BASE_URL` pointing to your Railway backend.
+
 ### Build for Production
 ```bash
 npm run build
@@ -133,6 +139,7 @@ npm run build
 ```bash
 VITE_API_BASE_URL=https://your-api-domain.com
 ```
+
 
 ## 📋 Backend Integration Checklist
 
