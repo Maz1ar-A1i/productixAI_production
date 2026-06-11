@@ -25,7 +25,7 @@ const Sidebar = () => {
 
   const handleLogout = () => {
     authService.logout();
-    window.location.href = "/";
+    navigate("/login", { replace: true });
   };
 
   const NavItem = ({ to, icon: Icon, label, badge, exact = false }) => (

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { 
   Users, Building, ToggleLeft, ToggleRight, 
@@ -8,6 +9,7 @@ import {
 } from "lucide-react";
 
 const SystemAdmin = () => {
+  const navigate = useNavigate();
   const [orgs, setOrgs] = useState([]);
   const [users, setUsers] = useState([]);
   const [licenses, setLicenses] = useState([]);
@@ -109,7 +111,7 @@ const SystemAdmin = () => {
 
   const logout = () => {
     localStorage.removeItem("token");
-    window.location.href = "/";
+    navigate("/login", { replace: true });
   };
 
   const createOrganization = async (e) => {
